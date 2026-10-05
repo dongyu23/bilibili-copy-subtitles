@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         一键复制视频全部字幕（B站 / YouTube）
+// @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      1.7.0
-// @description  一键复制 Bilibili / YouTube 视频的纯文字字幕，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别，支持 Key 图形化配置、识别进度、耗时统计与缓存留存时间。
+// @version      1.8.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -13,6 +13,8 @@
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/medialist/play/*
 // @match        https://www.youtube.com/watch*
+// @match        https://channels.weixin.qq.com/*
+// @match        https://yuanbao.tencent.com/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
@@ -29,6 +31,9 @@
 // @connect      api.stepfun.com
 // @connect      www.youtube.com
 // @connect      *.googlevideo.com
+// @connect      channels.weixin.qq.com
+// @connect      yuanbao.tencent.com
+// @connect      finder.video.qq.com
 // @run-at       document-idle
 // @license      MIT
 // ==/UserScript==
@@ -41,6 +46,8 @@
   const CONTROLS_ID = 'bili-copy-all-subtitles-controls';
   const TOAST_ID = 'bili-copy-all-subtitles-toast';
   const HIDDEN_KEY = 'bili-copy-subtitles-button-hidden';
+  const WX_BUTTON_ID = 'bili-copy-wxchannels-button';
+  const SETTINGS_BUTTON_ID = 'bili-copy-settings-button';
   // v6 起缓存带留存时间；仅本次会话的缓存走 sessionStorage，跨会话走 Tampermonkey 存储。
   const META_CACHE_PREFIX = 'video-subtitles-meta-v6:';
   const BODY_CACHE_PREFIX = 'video-subtitles-body-v6:';
@@ -54,10 +61,25 @@
   const YOUTUBE_PLAYER_API = videoId => `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(YOUTUBE_INNERTUBE_KEY)}&prettyPrint=false`;
   const YOUTUBE_CLIENT = { clientName: 'ANDROID', clientVersion: '20.10.38' };
 
+  // 视频号（微信 Channels）转文字：元宝解析分享链接 → finder 接口取直链 → 整包送 StepFun。
+  const YUANBAO_PARSE_API = 'https://yuanbao.tencent.com/api/weixin/get_parse_result';
+  const YUANBAO_HOME = 'https://yuanbao.tencent.com/chat/';
+  const WXCHANNELS_FEED_API = 'https://channels.weixin.qq.com/finder-preview/api/feed/get_feed_info';
+  const YUANBAO_COOKIE_SETTING = 'bili-copy-subtitles-yuanbao-cookie-v1';
+  const ASR_ENDPOINT_SETTING = 'bili-copy-subtitles-asr-endpoint-v1';
+  const ASR_LANGUAGE_SETTING = 'bili-copy-subtitles-asr-language-v1';
+  const DEBUG_SETTING = 'bili-copy-subtitles-debug-v1';
+  const WX_PANEL_ID = 'bili-copy-wxchannels-panel';
+  // 小于该体积的视频整包按 m4a 送识别；超过则浏览器内解码提取 16k 单声道 WAV 后分片送。
+  const WX_MAX_WHOLE_BYTES = 20 * 1024 * 1024;
+  const WX_WAV_CHUNK_BYTES = 10 * 1024 * 1024;
+
   function detectSite() {
     const host = location.hostname;
     if (host.endsWith('bilibili.com')) return 'bilibili';
     if (host.endsWith('youtube.com')) return 'youtube';
+    if (host.endsWith('channels.weixin.qq.com')) return 'wxchannels';
+    if (host.endsWith('yuanbao.tencent.com')) return 'yuanbao';
     return '';
   }
   const site = detectSite();
@@ -73,6 +95,8 @@
   const DEFAULT_ASR_API_KEY = '';
   // B 站 DASH 音轨为自包含 fMP4（ftyp+moov+sidx+moof/mdat），按 moof 边界分片后每片都可独立识别。
   const MAX_AUDIO_CHUNK_BYTES = 12 * 1024 * 1024;
+  // 分片之间无依赖，可并行送识别；StepFun 未公布单 Key 并发上限，保守取 3，触发限流再调低。
+  const ASR_CONCURRENCY = 3;
   const ASR_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
   const KEY_PANEL_ID = 'bili-copy-asr-key-panel';
@@ -92,6 +116,29 @@
     const value = Number(GM_getValue(CACHE_TTL_SETTING, 0));
     if (Number.isNaN(value)) return 0;
     return CACHE_TTL_OPTIONS.some(option => option.value === value) ? value : 0;
+  }
+
+  // ===== 可配置项：识别端点 / 语言 / 调试 / 元宝 Cookie =====
+
+  function getAsrEndpoint() {
+    return String(GM_getValue(ASR_ENDPOINT_SETTING, ASR_SSE_ENDPOINT) || ASR_SSE_ENDPOINT).trim() || ASR_SSE_ENDPOINT;
+  }
+
+  function getAsrLanguage() {
+    const value = String(GM_getValue(ASR_LANGUAGE_SETTING, ASR_LANGUAGE) || ASR_LANGUAGE).trim();
+    return value || ASR_LANGUAGE;
+  }
+
+  function getDebugEnabled() {
+    return GM_getValue(DEBUG_SETTING, false) === true;
+  }
+
+  function getYuanbaoCookie() {
+    return String(GM_getValue(YUANBAO_COOKIE_SETTING, '') || '').trim();
+  }
+
+  function debugLog(...args) {
+    if (getDebugEnabled()) console.log('[复制字幕][调试]', ...args);
   }
 
   function rememberPlayerApiUrl(value) {
@@ -164,6 +211,92 @@
     #${BUTTON_ID}:hover { background: #009bd3; transform: translateY(-2px); }
     #${BUTTON_ID}:disabled { cursor: wait; opacity: .72; transform: none; }
     #${CONTROLS_ID}[data-hidden="true"] { display: none; }
+    /* 视频号入口：次级样式，不抢主按钮视觉。 */
+    #${WX_BUTTON_ID} {
+      width: 100%;
+      min-height: 30px;
+      padding: 5px 7px;
+      border: 1px solid rgba(0, 0, 0, .12);
+      border-radius: 6px;
+      color: #61666d;
+      background: rgba(255, 255, 255, .92);
+      font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      transition: background .18s ease, color .18s ease;
+    }
+    #${WX_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
+    /* 设置入口：刻意弱化的齿轮，平时不显眼。 */
+    #${SETTINGS_BUTTON_ID} {
+      width: 26px;
+      min-height: 22px;
+      align-self: flex-end;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      color: #9499a0;
+      background: transparent;
+      font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      opacity: .38;
+      transition: opacity .18s ease, color .18s ease;
+    }
+    #${SETTINGS_BUTTON_ID}:hover { opacity: 1; color: #61666d; }
+    #${WX_PANEL_ID} {
+      position: fixed;
+      z-index: 100002;
+      left: 8px;
+      bottom: 16px;
+      width: 300px;
+      max-width: calc(100vw - 24px);
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font: 12px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #18191c;
+    }
+    #${WX_PANEL_ID}[data-hidden="true"] { display: none; }
+    #${WX_PANEL_ID} .wx-title { font-size: 13px; font-weight: 600; }
+    #${WX_PANEL_ID} .wx-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 9px;
+      border: 1px solid rgba(0, 0, 0, .15);
+      border-radius: 6px;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      word-break: break-all;
+    }
+    #${WX_PANEL_ID} .wx-row { display: flex; gap: 8px; }
+    #${WX_PANEL_ID} .wx-row button {
+      flex: 1;
+      padding: 6px 0;
+      border: 0;
+      border-radius: 6px;
+      color: #fff;
+      background: #00aeec;
+      cursor: pointer;
+      font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #${WX_PANEL_ID} .wx-row button:hover { background: #009bd3; }
+    #${WX_PANEL_ID} .wx-row button.ghost { background: #e3e5e7; color: #18191c; }
+    #${WX_PANEL_ID} .wx-row button.ghost:hover { background: #d7d9dc; }
+    #${WX_PANEL_ID} .wx-row button:disabled { cursor: wait; opacity: .6; }
+    #${WX_PANEL_ID} .wx-status { min-height: 16px; color: #61666d; font-size: 11px; word-break: break-all; }
+    #${WX_PANEL_ID} .wx-result {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 120px;
+      max-height: 260px;
+      padding: 8px;
+      border: 1px solid rgba(0, 0, 0, .12);
+      border-radius: 6px;
+      font: 12px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      resize: vertical;
+      word-break: break-all;
+    }
     #${SELECT_ID} {
       width: 100%;
       min-height: 30px;
@@ -253,6 +386,34 @@
     #${KEY_PANEL_ID} .panel-row button:disabled { cursor: wait; opacity: .6; }
     #${KEY_PANEL_ID} .panel-hint { color: #9499a0; font-size: 12px; }
     #${KEY_PANEL_ID} .panel-label { font-size: 12px; font-weight: 600; color: #61666d; }
+    #${KEY_PANEL_ID} .text-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 9px;
+      border: 1px solid rgba(0, 0, 0, .15);
+      border-radius: 6px;
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    #${KEY_PANEL_ID} .cookie-input {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 64px;
+      padding: 7px 9px;
+      border: 1px solid rgba(0, 0, 0, .15);
+      border-radius: 6px;
+      font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      resize: vertical;
+      word-break: break-all;
+    }
+    #${KEY_PANEL_ID} .check-line {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: #61666d;
+      cursor: pointer;
+    }
+    #${KEY_PANEL_ID} .check-line input { margin: 0; cursor: pointer; }
     #${KEY_PANEL_ID} .ttl-select {
       width: 100%;
       box-sizing: border-box;
@@ -574,9 +735,9 @@
     }
   }
 
-  function openKeyConfigPanel() {
+  function openSettingsPanel(focusKey = true) {
     if (document.getElementById(KEY_PANEL_ID)) {
-      document.getElementById(KEY_PANEL_ID).querySelector('.key-input')?.focus();
+      if (focusKey) document.getElementById(KEY_PANEL_ID).querySelector('.key-input')?.focus();
       return;
     }
     const overlay = document.createElement('div');
@@ -585,13 +746,18 @@
     panel.className = 'panel';
     const title = document.createElement('div');
     title.className = 'panel-title';
-    title.textContent = 'StepFun API Key 与缓存设置';
+    title.textContent = '设置';
     const status = document.createElement('div');
     status.className = 'panel-status';
     const current = getAsrApiKey();
     status.textContent = current
       ? `当前已设置：${current.slice(0, 4)}****${current.slice(-4)}`
       : '当前未设置 Key';
+
+    // ---- 分区：StepFun 语音识别 ----
+    const keyLabel = document.createElement('div');
+    keyLabel.className = 'panel-label';
+    keyLabel.textContent = 'StepFun API Key';
     const input = document.createElement('input');
     input.className = 'key-input';
     // 用 text + CSS 遮罩代替 password 类型，避免触发浏览器“保存密码”提示。
@@ -600,6 +766,27 @@
     input.value = current || '';
     input.autocomplete = 'off';
     input.spellcheck = false;
+    const endpointLabel = document.createElement('div');
+    endpointLabel.className = 'panel-label';
+    endpointLabel.textContent = '识别接口端点（SSE）';
+    const endpointInput = document.createElement('input');
+    endpointInput.className = 'text-input';
+    endpointInput.type = 'text';
+    endpointInput.placeholder = ASR_SSE_ENDPOINT;
+    endpointInput.value = getAsrEndpoint();
+    endpointInput.spellcheck = false;
+    const langLabel = document.createElement('div');
+    langLabel.className = 'panel-label';
+    langLabel.textContent = '识别语言';
+    const langSelect = document.createElement('select');
+    langSelect.className = 'ttl-select';
+    [['zh', '中文（默认）'], ['en', '英文'], ['ja', '日文']].forEach(([value, label]) => {
+      const item = document.createElement('option');
+      item.value = value;
+      item.textContent = label;
+      langSelect.appendChild(item);
+    });
+    langSelect.value = getAsrLanguage();
     const testResult = document.createElement('div');
     testResult.className = 'panel-test';
     const row = document.createElement('div');
@@ -607,7 +794,7 @@
     const saveButton = document.createElement('button');
     saveButton.textContent = '保存';
     const clearButton = document.createElement('button');
-    clearButton.textContent = '清除';
+    clearButton.textContent = '清除 Key';
     clearButton.className = 'ghost';
     const testButton = document.createElement('button');
     testButton.textContent = '测试连接';
@@ -621,8 +808,46 @@
     row.appendChild(cancelButton);
     const hint = document.createElement('div');
     hint.className = 'panel-hint';
-    hint.textContent = 'Key 仅保存在浏览器本地，用于无字幕视频的语音识别兜底，不会上传到其他服务器。';
+    hint.textContent = 'Key 与各配置仅保存在浏览器本地，不会上传到其他服务器。';
 
+    // ---- 分区：视频号 · 元宝 Cookie ----
+    const wxLabel = document.createElement('div');
+    wxLabel.className = 'panel-label';
+    wxLabel.textContent = '视频号解析 · 元宝 Cookie';
+    const cookieInput = document.createElement('textarea');
+    cookieInput.className = 'cookie-input';
+    cookieInput.placeholder = '粘贴 yuanbao.tencent.com 的完整 Cookie（含 HttpOnly 项）';
+    cookieInput.value = getYuanbaoCookie();
+    cookieInput.spellcheck = false;
+    const wxRow = document.createElement('div');
+    wxRow.className = 'panel-row';
+    const openYuanbaoButton = document.createElement('button');
+    openYuanbaoButton.textContent = '打开元宝';
+    openYuanbaoButton.className = 'ghost';
+    const clearCookieButton = document.createElement('button');
+    clearCookieButton.textContent = '清空 Cookie';
+    clearCookieButton.className = 'ghost';
+    wxRow.appendChild(openYuanbaoButton);
+    wxRow.appendChild(clearCookieButton);
+    const wxHint = document.createElement('div');
+    wxHint.className = 'panel-hint';
+    wxHint.textContent = '获取方式：点「打开元宝」并扫码登录 → 页面上按 F12 → 开发者工具 Application/应用 → Cookies → yuanbao.tencent.com → 全选复制粘贴到此处。视频号分享链接经元宝接口解析出视频直链，Cookie 过期后需重新获取。';
+
+    // ---- 分区：调试 ----
+    const debugLabel = document.createElement('div');
+    debugLabel.className = 'panel-label';
+    debugLabel.textContent = '调试';
+    const debugLine = document.createElement('label');
+    debugLine.className = 'check-line';
+    const debugBox = document.createElement('input');
+    debugBox.type = 'checkbox';
+    debugBox.checked = getDebugEnabled();
+    const debugText = document.createElement('span');
+    debugText.textContent = '在浏览器控制台输出详细日志（排查接口问题时开启）';
+    debugLine.appendChild(debugBox);
+    debugLine.appendChild(debugText);
+
+    // ---- 分区：字幕缓存 ----
     const ttlLabel = document.createElement('div');
     ttlLabel.className = 'panel-label';
     ttlLabel.textContent = '字幕缓存留存时间';
@@ -657,10 +882,21 @@
 
     panel.appendChild(title);
     panel.appendChild(status);
+    panel.appendChild(keyLabel);
     panel.appendChild(input);
+    panel.appendChild(endpointLabel);
+    panel.appendChild(endpointInput);
+    panel.appendChild(langLabel);
+    panel.appendChild(langSelect);
     panel.appendChild(testResult);
     panel.appendChild(row);
     panel.appendChild(hint);
+    panel.appendChild(wxLabel);
+    panel.appendChild(cookieInput);
+    panel.appendChild(wxRow);
+    panel.appendChild(wxHint);
+    panel.appendChild(debugLabel);
+    panel.appendChild(debugLine);
     panel.appendChild(ttlLabel);
     panel.appendChild(ttlSelect);
     panel.appendChild(cacheLine);
@@ -670,11 +906,17 @@
 
     saveButton.addEventListener('click', () => {
       setAsrApiKey(input.value);
+      const endpoint = endpointInput.value.trim();
+      GM_setValue(ASR_ENDPOINT_SETTING, endpoint);
+      GM_setValue(ASR_LANGUAGE_SETTING, langSelect.value);
+      GM_setValue(YUANBAO_COOKIE_SETTING, cookieInput.value.trim());
       GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
       const value = getAsrApiKey();
       status.textContent = value ? `当前已设置：${value.slice(0, 4)}****${value.slice(-4)}` : '当前未设置 Key';
-      showToast(value ? '设置已保存' : '已清除 StepFun API Key');
-      if (value && Number(ttlSelect.value) === 0) closeKeyConfigPanel();
+      refreshCacheLine();
+      showToast('设置已保存');
+      // 保存后关闭：首次配置 Key 的场景可直接返回继续复制。
+      closeSettingsPanel();
     });
     clearButton.addEventListener('click', () => {
       setAsrApiKey('');
@@ -703,7 +945,20 @@
         testButton.textContent = '测试连接';
       }
     });
-    cancelButton.addEventListener('click', closeKeyConfigPanel);
+    cancelButton.addEventListener('click', closeSettingsPanel);
+    openYuanbaoButton.addEventListener('click', () => {
+      if (typeof window.open === 'function') window.open(YUANBAO_HOME, '_blank', 'noopener');
+      showToast('已打开元宝，登录后按 F12 复制 Cookie');
+    });
+    clearCookieButton.addEventListener('click', () => {
+      cookieInput.value = '';
+      GM_setValue(YUANBAO_COOKIE_SETTING, '');
+      showToast('已清空元宝 Cookie');
+    });
+    debugBox.addEventListener('change', () => {
+      GM_setValue(DEBUG_SETTING, debugBox.checked === true);
+      showToast(debugBox.checked ? '调试日志已开启' : '调试日志已关闭');
+    });
     ttlSelect.addEventListener('change', () => {
       GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
       refreshCacheLine();
@@ -715,11 +970,11 @@
       showToast('已清除全部字幕缓存');
     });
     overlay.addEventListener('click', event => {
-      if (event.target === overlay) closeKeyConfigPanel();
+      if (event.target === overlay) closeSettingsPanel();
     });
   }
 
-  function closeKeyConfigPanel() {
+  function closeSettingsPanel() {
     document.getElementById(KEY_PANEL_ID)?.remove();
   }
 
@@ -1258,12 +1513,12 @@
     });
   }
 
-  async function transcribeAudioChunk(bytes, apiKey, onDelta) {
+  async function transcribeAudioChunk(bytes, apiKey, onDelta, formatType = 'm4a') {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), ASR_REQUEST_TIMEOUT_MS);
     let response;
     try {
-      response = await fetch(ASR_SSE_ENDPOINT, {
+      response = await fetch(getAsrEndpoint(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1276,12 +1531,12 @@
             input: {
               transcription: {
                 model: ASR_MODEL,
-                language: ASR_LANGUAGE,
+                language: getAsrLanguage(),
                 enable_itn: true,
                 // 开启时间戳后 SSE 增量会带回每段文字在音频中的位置，用于计算识别进度。
                 enable_timestamp: true,
               },
-              format: { type: 'm4a' },
+              format: { type: formatType },
             },
           },
         }),
@@ -1344,20 +1599,471 @@
 
     const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
     const totalDurationMs = (track.duration || 0) * 1000;
-    let text = '';
-    for (let index = 0; index < chunks.length; index += 1) {
-      // 分片时长按体积占比估算，用于把增量时间戳换算成总进度。
+    // 各分片独立识别、结果按序号拼接，保证文字顺序与串行一致。
+    const results = new Array(chunks.length).fill('');
+    let completed = 0;
+    let firstError = null;
+    // 在途分片各自的完成度（由 SSE 增量时间戳换算），聚合出总进度。
+    const inflightFractions = new Map();
+
+    const reportProgress = () => {
+      const stageText = chunks.length > 1 ? `正在识别（${completed}/${chunks.length} 段）` : '正在识别';
+      let inflight = 0;
+      for (const fraction of inflightFractions.values()) inflight += fraction;
+      updateProgress(stageText, (completed + inflight) / chunks.length,
+        chunks.length > 1 ? `并行 ${inflightFractions.size} 段` : '');
+    };
+
+    const transcribeChunk = async index => {
+      // 分片时长按体积占比估算，用于把增量时间戳换算成该片的完成度。
       const chunkDurationMs = bytes.length > 0
         ? (chunks[index].length / bytes.length) * totalDurationMs
         : 0;
-      const stageText = chunks.length > 1 ? `正在识别（第 ${index + 1}/${chunks.length} 段）` : '正在识别';
-      updateProgress(stageText, index / chunks.length, chunks.length > 1 ? formatMB(chunks[index].length) : '');
-      text += await transcribeAudioChunk(chunks[index], apiKey, endTimeMs => {
-        const fraction = chunkDurationMs > 0 ? Math.min(1, endTimeMs / chunkDurationMs) : 0;
-        updateProgress(stageText, (index + fraction) / chunks.length, chunks.length > 1 ? formatMB(chunks[index].length) : '');
+      inflightFractions.set(index, 0);
+      reportProgress();
+      try {
+        results[index] = await transcribeAudioChunk(chunks[index], apiKey, endTimeMs => {
+          if (!inflightFractions.has(index)) return;
+          inflightFractions.set(index, chunkDurationMs > 0 ? Math.min(1, endTimeMs / chunkDurationMs) : 0);
+          reportProgress();
+        });
+      } catch (error) {
+        // 任一片失败即整体失败，与串行时一致；先记下错误，让在途请求自然结束后再抛出。
+        if (!firstError) firstError = error;
+      } finally {
+        inflightFractions.delete(index);
+        completed += 1;
+        reportProgress();
+      }
+    };
+
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < chunks.length && !firstError) {
+        const index = cursor;
+        cursor += 1;
+        await transcribeChunk(index);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(ASR_CONCURRENCY, chunks.length) }, worker));
+    if (firstError) throw firstError;
+    return { text: normalizeSubtitle([{ content: results.join('') }]), chunkCount: chunks.length };
+  }
+
+  // ===== 视频号（微信 Channels）转文字 =====
+  // 链路：元宝接口解析分享链接（取 token/eid）→ finder 接口取视频直链 → 下载 → 整包/分片送 StepFun。
+  // 两个接口都必须在浏览器环境内发起（服务端有 TLS 指纹校验），跨域部分走 GM_xmlhttpRequest。
+
+  function gmRequest(url, options = {}) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: options.method || 'GET',
+        url,
+        headers: options.headers || {},
+        data: options.data,
+        responseType: options.responseType || 'text',
+        timeout: options.timeout || 300000,
+        onprogress: options.onprogress,
+        onload: response => {
+          if (response.status >= 200 && response.status < 300) resolve(response);
+          else reject(new Error(`HTTP ${response.status}`));
+        },
+        onerror: response => reject(
+          new Error(response?.status ? `HTTP ${response.status}` : '网络请求失败')
+        ),
+        ontimeout: () => reject(new Error('请求超时')),
       });
+    });
+  }
+
+  // 归一化分享链接：接受完整 URL 或裸 ID（A8CFFBXJHP）。
+  function wxNormalizeShareUrl(input) {
+    const text = String(input || '').trim();
+    if (!text) return '';
+    if (/^https?:\/\//i.test(text)) return text;
+    if (/^[A-Za-z0-9_-]{6,}$/.test(text)) return `https://weixin.qq.com/sph/${text}`;
+    return text;
+  }
+
+  function wxCacheKey(shareUrl) {
+    const sph = String(shareUrl).match(/sph\/([A-Za-z0-9_-]+)/);
+    if (sph) return sph[1];
+    const id = String(shareUrl).match(/[?&]id=([A-Za-z0-9_-]+)/);
+    if (id) return id[1];
+    return String(shareUrl);
+  }
+
+  async function wxParseShareUrl(shareUrl) {
+    const cookie = getYuanbaoCookie();
+    if (!cookie) {
+      throw new Error('尚未设置元宝 Cookie，请在设置面板填写（点「打开元宝」登录后从开发者工具复制）');
     }
-    return { text: normalizeSubtitle([{ content: text }]), chunkCount: chunks.length };
+    const response = await gmRequest(YUANBAO_PARSE_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/plain, */*',
+        Referer: YUANBAO_HOME,
+        cookie,
+      },
+      data: JSON.stringify({ type: 'video_channel_url', url: shareUrl, scene: 1 }),
+    });    let json;
+    try { json = JSON.parse(response.responseText); } catch (_) {
+      throw new Error('元宝解析响应异常');
+    }
+    if (json.code !== 0 || !json.data || !json.data.playable_url) {
+      throw new Error(json.msg || '元宝解析失败（Cookie 可能已过期，请更新）');
+    }
+    const playable = new URL(json.data.playable_url);
+    const token = playable.searchParams.get('token') || '';
+    const eid = playable.searchParams.get('eid') || '';
+    if (!token || !eid) throw new Error('解析结果缺少 token/eid');
+    debugLog('元宝解析成功', { eid, desc: json.data.desc || '' });
+    return { token, eid, desc: json.data.desc || '' };
+  }
+
+  async function wxGetFeedInfo(token, eid) {
+    const rid = `${Math.floor(Date.now() / 1000).toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    const pageUrl = encodeURIComponent('https://channels.weixin.qq.com/finder-preview/pages/feed');
+    const referer = `https://channels.weixin.qq.com/finder-preview/pages/feed`
+      + `?entry_card_type=48&comment_scene=39&appid=0`
+      + `&token=${encodeURIComponent(token)}&entry_scene=0&eid=${encodeURIComponent(eid)}`;
+    const response = await gmRequest(`${WXCHANNELS_FEED_API}?_rid=${rid}&_pageUrl=${pageUrl}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/plain, */*',
+        // GM_xmlhttpRequest 不会自动携带浏览器 sec-* 头，显式补齐（接口侧有环境校验）。
+        'sec-ch-ua': '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        Referer: referer,
+      },
+      data: JSON.stringify({ baseReq: { generalToken: token }, exportId: eid }),
+    });
+    let json;
+    try { json = JSON.parse(response.responseText); } catch (_) {
+      throw new Error('视频信息响应异常');
+    }
+    const feed = json.data && json.data.feedInfo;
+    if (!feed) throw new Error('未获取到视频信息');
+    const detail = json.data.errMsg;
+    if (detail && (Number(detail.type) !== 0 || detail.title)) {
+      throw new Error(`${detail.title || '视频不可用'}${detail.content ? `：${detail.content}` : ''}`);
+    }
+    return feed;
+  }
+
+  async function wxDownloadVideo(videoUrl, onProgress) {
+    const response = await gmRequest(videoUrl, {
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: 300000,
+      onprogress: onProgress,
+    });
+    return new Uint8Array(response.response);
+  }
+
+  // 视频号直链默认是明文 MP4（ftyp 头）；加密文件头部为随机字节。
+  function wxIsEncrypted(bytes) {
+    if (bytes.length < 12) return true;
+    const type = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
+    return type !== 'ftyp' && type !== 'moov' && type !== 'styp' && type !== 'free' && type !== 'skip';
+  }
+
+  // 读 moov/mvhd 得到时长（秒），用于预估与历史统计。
+  function wxReadDuration(bytes) {
+    try {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      let off = 0;
+      while (off + 8 <= bytes.length) {
+        const size = view.getUint32(off);
+        const type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+        if (size < 8 || off + size > bytes.length) break;
+        if (type === 'moov') {
+          let p = off + 8;
+          const end = off + size;
+          while (p + 8 <= end) {
+            const sz = view.getUint32(p);
+            const ty = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7]);
+            if (ty === 'mvhd') {
+              const version = bytes[p + 8];
+              const timescaleOff = version === 1 ? p + 28 : p + 20;
+              const durationOff = version === 1 ? p + 32 : p + 24;
+              const timescale = view.getUint32(timescaleOff);
+              const duration = version === 1 ? Number(view.getBigUint64(durationOff)) : view.getUint32(durationOff);
+              return timescale > 0 ? duration / timescale : 0;
+            }
+            if (sz < 8) break;
+            p += sz;
+          }
+          return 0;
+        }
+        off += size;
+      }
+    } catch (_) {
+      // 忽略解析异常
+    }
+    return 0;
+  }
+
+  function wxBuildWav(pcm, sampleRate = 16000, channels = 1, bits = 16) {
+    const buffer = new ArrayBuffer(44 + pcm.byteLength);
+    const view = new DataView(buffer);
+    view.setUint32(0, 0x46464952, true); // "RIFF"
+    view.setUint32(4, 36 + pcm.byteLength, true);
+    view.setUint32(8, 0x45564157, true); // "WAVE"
+    view.setUint32(12, 0x20746d66, true); // "fmt "
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, channels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, (sampleRate * channels * bits) / 8, true);
+    view.setUint16(32, (channels * bits) / 8, true);
+    view.setUint16(34, bits, true);
+    view.setUint32(36, 0x61746164, true); // "data"
+    view.setUint32(40, pcm.byteLength, true);
+    new Uint8Array(buffer, 44).set(pcm);
+    return new Uint8Array(buffer);
+  }
+
+  // 浏览器内置解码器提取音轨并重采样为 16k 单声道 PCM（替代 ffmpeg）。
+  function wxDecodeToPcm16k(bytes) {
+    return new Promise((resolve, reject) => {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) {
+        reject(new Error('当前浏览器不支持 AudioContext，无法提取音频'));
+        return;
+      }
+      const ctx = new Ctx();
+      const slice = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      ctx.decodeAudioData(slice, audio => {
+        try {
+          const targetRate = 16000;
+          const channels = audio.numberOfChannels;
+          const srcRate = audio.sampleRate;
+          const srcLen = audio.length;
+          const ratio = srcRate / targetRate;
+          const outLen = Math.max(1, Math.floor(srcLen / ratio));
+          const pcm = new Int16Array(outLen);
+          const data = [];
+          for (let c = 0; c < channels; c += 1) data.push(audio.getChannelData(c));
+          for (let i = 0; i < outLen; i += 1) {
+            const pos = i * ratio;
+            const i0 = Math.floor(pos);
+            const frac = pos - i0;
+            let sum = 0;
+            for (let c = 0; c < channels; c += 1) {
+              const ch = data[c];
+              const a = ch[i0] || 0;
+              const b = ch[Math.min(i0 + 1, srcLen - 1)] || 0;
+              sum += a + (b - a) * frac;
+            }
+            const v = sum / channels;
+            pcm[i] = Math.max(-32768, Math.min(32767, v * 32767));
+          }
+          ctx.close();
+          resolve({ pcm, duration: audio.duration, sampleRate: targetRate });
+        } catch (error) {
+          ctx.close();
+          reject(error);
+        }
+      }, error => {
+        ctx.close();
+        reject(new Error(`音频解码失败：${error?.message || error}`));
+      });
+    });
+  }
+
+  // 小文件整包按 m4a 送；大文件解码提 WAV 后分片送。
+  async function wxTranscribeBytes(bytes, apiKey) {
+    if (bytes.length <= WX_MAX_WHOLE_BYTES) {
+      updateProgress('正在识别', null, formatMB(bytes.length));
+      const text = await transcribeAudioChunk(bytes, apiKey, null, 'm4a');
+      return { text, chunkCount: 1 };
+    }
+    updateProgress('正在提取音频', null, formatMB(bytes.length));
+    const { pcm } = await wxDecodeToPcm16k(bytes);
+    const pcmBytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+    const chunkCount = Math.max(1, Math.ceil(pcmBytes.length / WX_WAV_CHUNK_BYTES));
+    let text = '';
+    for (let index = 0; index < chunkCount; index += 1) {
+      const start = index * WX_WAV_CHUNK_BYTES;
+      const piece = pcmBytes.subarray(start, Math.min(start + WX_WAV_CHUNK_BYTES, pcmBytes.length));
+      updateProgress(`正在识别（第 ${index + 1}/${chunkCount} 段）`, index / chunkCount, formatMB(piece.length));
+      text += await transcribeAudioChunk(wxBuildWav(piece), apiKey, null, 'wav');
+    }
+    return { text, chunkCount };
+  }
+
+  async function runWxchannelsTranscribe(shareUrlRaw) {
+    const shareUrl = wxNormalizeShareUrl(shareUrlRaw);
+    if (!shareUrl) {
+      showToast('请先粘贴视频号分享链接');
+      return;
+    }
+    if (typeof GM_xmlhttpRequest !== 'function') {
+      showToast('当前脚本管理器不支持 GM_xmlhttpRequest，无法使用视频号功能');
+      return;
+    }
+    const apiKey = getAsrApiKey();
+    if (!apiKey) {
+      openSettingsPanel();
+      showToast('请先设置 StepFun API Key');
+      return;
+    }
+    if (!getYuanbaoCookie()) {
+      openSettingsPanel(false);
+      showToast('请先在设置中填写元宝 Cookie');
+      return;
+    }
+    if (!asrConsentGiven && !window.confirm(
+      '将通过 StepFun 语音识别把视频号视频转成文字，音频会上传至 StepFun（按时长计费），是否继续？'
+    )) return;
+    asrConsentGiven = true;
+
+    const panel = document.getElementById(WX_PANEL_ID);
+    const statusEl = panel?.querySelector('.wx-status');
+    const resultEl = panel?.querySelector('.wx-result');
+    const startEl = panel?.querySelector('.wx-start');
+    const setStatus = text => {
+      if (statusEl) statusEl.textContent = text;
+      debugLog(text);
+    };
+
+    const cacheKey = `wxchannels:${wxCacheKey(shareUrl)}`;
+    const cached = readCache(BODY_CACHE_PREFIX, cacheKey);
+    if (cached) {
+      if (resultEl) resultEl.value = cached;
+      setStatus('已命中标签页缓存');
+      await writeClipboard(cached);
+      showToast(`已通过语音识别复制，共 ${cached.length} 个字符（标签页缓存）`);
+      return;
+    }
+
+    const startedAt = Date.now();
+    if (startEl) startEl.disabled = true;
+    showProgressPanel();
+    try {
+      setStatus('正在解析分享链接…');
+      updateProgress('正在解析分享链接', null, '');
+      const { token, eid, desc } = await wxParseShareUrl(shareUrl);
+
+      setStatus('正在获取视频信息…');
+      updateProgress('正在获取视频信息', null, desc || '');
+      const feed = await wxGetFeedInfo(token, eid);
+      const videoUrl = feed.videoUrl
+        || (feed.h264VideoInfo || {}).videoUrl
+        || (feed.h265VideoInfo || {}).videoUrl;
+      if (!videoUrl) throw new Error('未获取到视频地址（视频可能已删除或仅作者可见）');
+      debugLog('视频直链', videoUrl.slice(0, 140));
+
+      setStatus('正在下载视频…');
+      updateProgress('正在下载视频', null, desc || '');
+      const bytes = await wxDownloadVideo(videoUrl, (loaded, total) => {
+        updateProgress('正在下载视频', total ? loaded / total : null,
+          `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
+      });
+      if (wxIsEncrypted(bytes)) {
+        throw new Error('该视频已加密，暂不支持自动转写');
+      }
+      const duration = wxReadDuration(bytes);
+      debugLog('下载完成', { bytes: bytes.length, duration });
+
+      const { text, chunkCount } = await wxTranscribeBytes(bytes, apiKey);
+      if (!text) throw new Error('语音识别结果为空');
+      const elapsedMs = Date.now() - startedAt;
+      writeCache(BODY_CACHE_PREFIX, cacheKey, text);
+      pushAsrHistory({ audioSeconds: duration, elapsedMs, chunkCount, at: Date.now() });
+      if (resultEl) resultEl.value = text;
+      setStatus(`完成：${text.length} 字符 · 用时 ${formatElapsed(elapsedMs)}`);
+      await writeClipboard(text);
+      showToast(`已通过语音识别复制，共 ${text.length} 个字符 · 用时 ${formatElapsed(elapsedMs)}`);
+    } catch (error) {
+      console.error('[复制字幕][视频号]', error);
+      setStatus(`失败：${error.message || error}`);
+      showToast(`视频号转文字失败：${error.message || error}`);
+    } finally {
+      hideProgressPanel();
+      if (startEl) startEl.disabled = false;
+    }
+  }
+
+  function openWxchannelsPanel() {
+    let panel = document.getElementById(WX_PANEL_ID);
+    if (panel) {
+      panel.dataset.hidden = 'false';
+      panel.querySelector('.wx-input')?.focus();
+      return;
+    }
+    panel = document.createElement('div');
+    panel.id = WX_PANEL_ID;
+    const title = document.createElement('div');
+    title.className = 'wx-title';
+    title.textContent = '视频号转文字';
+    const input = document.createElement('input');
+    input.className = 'wx-input';
+    input.placeholder = '粘贴视频号分享链接（weixin.qq.com/sph/…）';
+    input.spellcheck = false;
+    // 在视频号页面打开时自动带上当前视频的短链。
+    if (site === 'wxchannels') {
+      const id = new URL(location.href).searchParams.get('id');
+      if (id) input.value = `https://weixin.qq.com/sph/${id}`;
+    }
+    const row = document.createElement('div');
+    row.className = 'wx-row';
+    const startButton = document.createElement('button');
+    startButton.className = 'wx-start';
+    startButton.textContent = '开始转文字';
+    const cancelButton = document.createElement('button');
+    cancelButton.className = 'ghost';
+    cancelButton.textContent = '收起';
+    row.appendChild(startButton);
+    row.appendChild(cancelButton);
+    const status = document.createElement('div');
+    status.className = 'wx-status';
+    status.textContent = '需先在设置里配置 StepFun Key 与元宝 Cookie（右上角 ⚙）';
+    const result = document.createElement('textarea');
+    result.className = 'wx-result';
+    result.placeholder = '转写结果会显示在这里，并自动复制到剪贴板';
+    result.readOnly = true;
+    const resultRow = document.createElement('div');
+    resultRow.className = 'wx-row';
+    const copyButton = document.createElement('button');
+    copyButton.textContent = '复制文字';
+    const closeButton = document.createElement('button');
+    closeButton.className = 'ghost';
+    closeButton.textContent = '关闭';
+    resultRow.appendChild(copyButton);
+    resultRow.appendChild(closeButton);
+
+    startButton.addEventListener('click', () => runWxchannelsTranscribe(input.value));
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') runWxchannelsTranscribe(input.value);
+    });
+    cancelButton.addEventListener('click', () => { panel.dataset.hidden = 'true'; });
+    copyButton.addEventListener('click', async () => {
+      const text = result.value || '';
+      if (!text) {
+        showToast('还没有转写结果');
+        return;
+      }
+      await writeClipboard(text);
+      showToast(`已复制 ${text.length} 个字符`);
+    });
+    closeButton.addEventListener('click', () => panel.remove());
+
+    panel.appendChild(title);
+    panel.appendChild(input);
+    panel.appendChild(row);
+    panel.appendChild(status);
+    panel.appendChild(result);
+    panel.appendChild(resultRow);
+    document.body.appendChild(panel);
+    input.focus();
   }
 
   async function writeClipboard(text) {
@@ -1398,7 +2104,7 @@
       const subtitle = chooseSubtitle(subtitles, selectedLanguage);
       if (!subtitle?.subtitle_url) {
         if (!getAsrApiKey()) {
-          openKeyConfigPanel();
+          openSettingsPanel();
           showToast('当前视频没有字幕，请先设置 StepFun API Key');
           return;
         }
@@ -1487,28 +2193,49 @@
     if (!document.body || document.getElementById(CONTROLS_ID)) return;
     const controls = document.createElement('div');
     controls.id = CONTROLS_ID;
-    const select = document.createElement('select');
-    select.id = SELECT_ID;
-    select.title = '选择要复制的字幕语言';
-    const option = document.createElement('option');
-    option.value = 'auto';
-    option.textContent = '中文（默认）';
-    select.appendChild(option);
-    controls.appendChild(select);
-    const button = document.createElement('button');
-    button.id = BUTTON_ID;
-    button.type = 'button';
-    button.textContent = '复制全部字幕';
-    button.title = '复制当前视频的纯文字字幕；无字幕视频可回退到语音识别';
-    button.dataset.hidden = String(isHidden());
-    button.addEventListener('click', copyAllSubtitles);
-    controls.appendChild(button);
+    // 语言下拉与复制按钮仅在 B 站 / YouTube 页面有意义；视频号与元宝页面只保留功能入口。
+    if (site === 'bilibili' || site === 'youtube') {
+      const select = document.createElement('select');
+      select.id = SELECT_ID;
+      select.title = '选择要复制的字幕语言';
+      const option = document.createElement('option');
+      option.value = 'auto';
+      option.textContent = '中文（默认）';
+      select.appendChild(option);
+      controls.appendChild(select);
+      const button = document.createElement('button');
+      button.id = BUTTON_ID;
+      button.type = 'button';
+      button.textContent = '复制全部字幕';
+      button.title = '复制当前视频的纯文字字幕；无字幕视频可回退到语音识别';
+      button.dataset.hidden = String(isHidden());
+      button.addEventListener('click', copyAllSubtitles);
+      controls.appendChild(button);
+    }
+    // 视频号入口：所有已匹配站点都显示，方便与另外两个站点统一使用。
+    const wxButton = document.createElement('button');
+    wxButton.id = WX_BUTTON_ID;
+    wxButton.type = 'button';
+    wxButton.textContent = '视频号转文字';
+    wxButton.title = '粘贴视频号分享链接，经语音识别转成文字';
+    wxButton.dataset.hidden = String(isHidden());
+    wxButton.addEventListener('click', openWxchannelsPanel);
+    controls.appendChild(wxButton);
+    // 设置入口：刻意弱化的齿轮，鼠标悬停才清晰。
+    const settingsButton = document.createElement('button');
+    settingsButton.id = SETTINGS_BUTTON_ID;
+    settingsButton.type = 'button';
+    settingsButton.textContent = '⚙';
+    settingsButton.title = '设置（Key / 端点 / 调试 / 元宝 Cookie / 缓存）';
+    settingsButton.addEventListener('click', () => openSettingsPanel());
+    controls.appendChild(settingsButton);
     controls.dataset.hidden = String(isHidden());
     document.body.appendChild(controls);
   }
 
   GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
-  GM_registerMenuCommand('设置 StepFun API Key 与缓存', openKeyConfigPanel);
+  GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
+  GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
   GM_registerMenuCommand('显示/隐藏页面按钮', () => {
     const hidden = !isHidden();
     localStorage.setItem(HIDDEN_KEY, hidden ? '1' : '0');
