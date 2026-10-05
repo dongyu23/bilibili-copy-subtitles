@@ -141,7 +141,7 @@
     }
     #${TOAST_ID} {
       position: fixed;
-      z-index: 100002;
+      z-index: 100006;
       left: 50%;
       top: 72px;
       max-width: min(560px, calc(100vw - 40px));
@@ -190,6 +190,14 @@
       border: 1px solid rgba(0, 0, 0, .15);
       border-radius: 6px;
       font: 13px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+      /* 视觉遮罩：用 text 输入 + CSS 打点，避免被浏览器密码管理器识别为密码框。 */
+      -webkit-text-security: disc;
+    }
+    #${KEY_PANEL_ID} .panel-test {
+      min-height: 16px;
+      font-size: 12px;
+      color: #9499a0;
+      word-break: break-all;
     }
     #${KEY_PANEL_ID} .panel-row { display: flex; gap: 8px; }
     #${KEY_PANEL_ID} .panel-row button {
@@ -380,9 +388,14 @@
       : '当前未设置 Key';
     const input = document.createElement('input');
     input.className = 'key-input';
-    input.type = 'password';
+    // 用 text + CSS 遮罩代替 password 类型，避免触发浏览器“保存密码”提示。
+    input.type = 'text';
     input.placeholder = '粘贴 StepFun API Key';
     input.value = current || '';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    const testResult = document.createElement('div');
+    testResult.className = 'panel-test';
     const row = document.createElement('div');
     row.className = 'panel-row';
     const saveButton = document.createElement('button');
@@ -406,6 +419,7 @@
     panel.appendChild(title);
     panel.appendChild(status);
     panel.appendChild(input);
+    panel.appendChild(testResult);
     panel.appendChild(row);
     panel.appendChild(hint);
     overlay.appendChild(panel);
@@ -422,6 +436,7 @@
     clearButton.addEventListener('click', () => {
       setAsrApiKey('');
       input.value = '';
+      testResult.textContent = '';
       status.textContent = '当前未设置 Key';
       showToast('已清除 StepFun API Key，无字幕视频将不再自动识别');
     });
@@ -433,8 +448,13 @@
       }
       testButton.disabled = true;
       testButton.textContent = '测试中…';
+      testResult.textContent = '正在测试连接…';
+      testResult.style.color = '#9499a0';
       try {
-        showToast(await testAsrKeyConnection(value));
+        const message = await testAsrKeyConnection(value);
+        testResult.textContent = message;
+        testResult.style.color = /成功/.test(message) ? '#00b42a' : '#f53f3f';
+        showToast(message);
       } finally {
         testButton.disabled = false;
         testButton.textContent = '测试连接';
