@@ -1,29 +1,34 @@
 // ==UserScript==
-// @name         Bilibili 一键复制全部字幕
+// @name         一键复制视频全部字幕（B站 / YouTube）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      1.6.0
-// @description  一键复制当前 Bilibili 视频的纯文字字幕，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别，支持 Key 图形化配置、识别进度与耗时统计。
+// @version      1.7.0
+// @description  一键复制 Bilibili / YouTube 视频的纯文字字幕，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别，支持 Key 图形化配置、识别进度、耗时统计与缓存留存时间。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
-// @supportURL  https://github.com/dongyu23/bilibili-copy-subtitles/issues
+// @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
 // @downloadURL  https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
 // @updateURL    https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/list/*
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/medialist/play/*
+// @match        https://www.youtube.com/watch*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // @grant        unsafeWindow
 // @connect      api.bilibili.com
 // @connect      aisubtitle.hdslb.com
 // @connect      *.hdslb.com
 // @connect      *.bilivideo.com
 // @connect      api.stepfun.com
+// @connect      www.youtube.com
+// @connect      *.googlevideo.com
 // @run-at       document-idle
 // @license      MIT
 // ==/UserScript==
@@ -36,13 +41,26 @@
   const CONTROLS_ID = 'bili-copy-all-subtitles-controls';
   const TOAST_ID = 'bili-copy-all-subtitles-toast';
   const HIDDEN_KEY = 'bili-copy-subtitles-button-hidden';
-  // v5 在当前标签页生命周期内缓存；关闭标签页后由浏览器自动清除。
-  const META_CACHE_PREFIX = 'bili-copy-subtitles-meta-v5:';
-  const BODY_CACHE_PREFIX = 'bili-copy-subtitles-body-v5:';
+  // v6 起缓存带留存时间；仅本次会话的缓存走 sessionStorage，跨会话走 Tampermonkey 存储。
+  const META_CACHE_PREFIX = 'video-subtitles-meta-v6:';
+  const BODY_CACHE_PREFIX = 'video-subtitles-body-v6:';
   const memoryCache = new Map();
   const playerApiUrls = [];
   const playerPlayApiUrls = [];
   let asrConsentGiven = false;
+
+  // 站点识别与 YouTube 接口。
+  const YOUTUBE_INNERTUBE_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+  const YOUTUBE_PLAYER_API = videoId => `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(YOUTUBE_INNERTUBE_KEY)}&prettyPrint=false`;
+  const YOUTUBE_CLIENT = { clientName: 'ANDROID', clientVersion: '20.10.38' };
+
+  function detectSite() {
+    const host = location.hostname;
+    if (host.endsWith('bilibili.com')) return 'bilibili';
+    if (host.endsWith('youtube.com')) return 'youtube';
+    return '';
+  }
+  const site = detectSite();
 
   // 无字幕视频的语音识别兜底（Step Plan）。
   const ASR_SSE_ENDPOINT = 'https://api.stepfun.com/step_plan/v1/audio/asr/sse';
@@ -58,6 +76,23 @@
   const ASR_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
   const KEY_PANEL_ID = 'bili-copy-asr-key-panel';
+
+  // 缓存留存时间（毫秒）；0 = 仅本次会话，-1 = 永久。
+  const CACHE_TTL_SETTING = 'bili-copy-subtitles-cache-ttl-v1';
+  const CACHE_TTL_OPTIONS = [
+    { label: '仅本次会话（刷新保留，关闭标签页清除）', value: 0 },
+    { label: '1 小时', value: 60 * 60 * 1000 },
+    { label: '24 小时', value: 24 * 60 * 60 * 1000 },
+    { label: '7 天', value: 7 * 24 * 60 * 60 * 1000 },
+    { label: '30 天', value: 30 * 24 * 60 * 60 * 1000 },
+    { label: '永久', value: -1 },
+  ];
+
+  function getCacheTtlMs() {
+    const value = Number(GM_getValue(CACHE_TTL_SETTING, 0));
+    if (Number.isNaN(value)) return 0;
+    return CACHE_TTL_OPTIONS.some(option => option.value === value) ? value : 0;
+  }
 
   function rememberPlayerApiUrl(value) {
     try {
@@ -169,8 +204,10 @@
       background: rgba(0, 0, 0, .45);
     }
     #${KEY_PANEL_ID} .panel {
-      width: 340px;
+      width: 360px;
       max-width: calc(100vw - 40px);
+      max-height: calc(100vh - 40px);
+      overflow: auto;
       padding: 18px;
       border-radius: 10px;
       background: #fff;
@@ -215,6 +252,27 @@
     #${KEY_PANEL_ID} .panel-row button.ghost:hover { background: #d7d9dc; }
     #${KEY_PANEL_ID} .panel-row button:disabled { cursor: wait; opacity: .6; }
     #${KEY_PANEL_ID} .panel-hint { color: #9499a0; font-size: 12px; }
+    #${KEY_PANEL_ID} .panel-label { font-size: 12px; font-weight: 600; color: #61666d; }
+    #${KEY_PANEL_ID} .ttl-select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 8px;
+      border: 1px solid rgba(0, 0, 0, .15);
+      border-radius: 6px;
+      background: #fff;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #18191c;
+    }
+    #${KEY_PANEL_ID} .cache-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #61666d; }
+    #${KEY_PANEL_ID} .cache-line button {
+      padding: 4px 10px;
+      border: 0;
+      border-radius: 4px;
+      color: #fff;
+      background: #f56c6c;
+      cursor: pointer;
+      font-size: 12px;
+    }
     #${PROGRESS_PANEL_ID} {
       position: fixed;
       z-index: 100004;
@@ -313,6 +371,119 @@
     }
   }
 
+  // 文本响应（YouTube 字幕为 XML）。
+  async function requestText(url) {
+    let fetchError;
+    try {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`浏览器请求返回 HTTP ${response.status}`);
+      return await response.text();
+    } catch (error) {
+      fetchError = error;
+    }
+
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        timeout: 20000,
+        onload(response) {
+          if (response.status < 200 || response.status >= 300) {
+            reject(new Error(`油猴请求返回 HTTP ${response.status}`));
+            return;
+          }
+          resolve(response.responseText);
+        },
+        ontimeout: () => reject(new Error('油猴请求超时')),
+        onerror: response => reject(
+          new Error(`油猴请求失败${response?.status ? `（HTTP ${response.status}）` : ''}`)
+        ),
+      });
+    }).catch(error => {
+      throw new Error(`${error.message || error}；浏览器请求：${fetchError?.message || '失败'}`);
+    });
+  }
+
+  async function requestJsonPost(url, body) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`接口返回 HTTP ${response.status}`);
+    return response.json();
+  }
+
+  // ===== 缓存（带留存时间） =====
+
+  function readCache(prefix, key) {
+    const fullKey = `${prefix}${key}`;
+    const memory = memoryCache.get(fullKey);
+    if (memory) return memory.value;
+    try {
+      const raw = sessionStorage.getItem(fullKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'value')) {
+          memoryCache.set(fullKey, parsed);
+          return parsed.value;
+        }
+      }
+    } catch (_) {
+      // 忽略存储异常
+    }
+
+    const ttl = getCacheTtlMs();
+    if (ttl === 0) return null; // 仅本次会话，不读持久层
+    try {
+      const raw = GM_getValue(fullKey, '');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !Object.prototype.hasOwnProperty.call(parsed, 'value')) return null;
+      if (ttl > 0 && Date.now() - Date.parse(parsed.cachedAt) > ttl) return null; // 已过期
+      memoryCache.set(fullKey, parsed);
+      return parsed.value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function writeCache(prefix, key, value) {
+    const fullKey = `${prefix}${key}`;
+    const entry = { value, cachedAt: new Date().toISOString() };
+    memoryCache.set(fullKey, entry);
+    try { sessionStorage.setItem(fullKey, JSON.stringify(entry)); } catch (_) { /* storage may be disabled */ }
+    if (getCacheTtlMs() !== 0) {
+      try { GM_setValue(fullKey, JSON.stringify(entry)); } catch (_) { /* 忽略存储异常 */ }
+    }
+  }
+
+  function listCacheKeys() {
+    if (typeof GM_listValues !== 'function') return [];
+    try {
+      return GM_listValues().filter(key => key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function clearAllCaches() {
+    memoryCache.clear();
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX)) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch (_) {
+      // 忽略存储异常
+    }
+    for (const key of listCacheKeys()) {
+      try { GM_deleteValue(key); } catch (_) { /* 忽略存储异常 */ }
+    }
+  }
+
   // ===== 无字幕视频的语音识别兜底 =====
 
   function getAsrApiKey() {
@@ -368,6 +539,41 @@
     return `${(bytes / 1048576).toFixed(1)} MB`;
   }
 
+  // 测试 Key 连通性：优先浏览器请求，失败时回退油猴请求（不受跨域限制）。
+  async function testAsrKeyConnection(apiKey) {
+    try {
+      const response = await fetch(ASR_MODELS_ENDPOINT, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        cache: 'no-store',
+      });
+      if (response.ok) return '连接成功，Key 可用';
+      if (response.status === 401 || response.status === 403) return `连接失败：Key 无效（HTTP ${response.status}）`;
+      return `连接异常：HTTP ${response.status}`;
+    } catch (error) {
+      if (typeof GM_xmlhttpRequest !== 'function') {
+        return `连接失败：${error.message || error}`;
+      }
+      try {
+        const status = await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url: ASR_MODELS_ENDPOINT,
+            timeout: 15000,
+            headers: { Authorization: `Bearer ${apiKey}` },
+            onload: response => resolve(response.status),
+            ontimeout: () => reject(new Error('油猴请求超时')),
+            onerror: () => reject(new Error('油猴请求失败')),
+          });
+        });
+        if (status >= 200 && status < 300) return '连接成功，Key 可用';
+        if (status === 401 || status === 403) return `连接失败：Key 无效（HTTP ${status}）`;
+        return `连接异常：HTTP ${status}`;
+      } catch (gmError) {
+        return `连接失败：${gmError.message || gmError}`;
+      }
+    }
+  }
+
   function openKeyConfigPanel() {
     if (document.getElementById(KEY_PANEL_ID)) {
       document.getElementById(KEY_PANEL_ID).querySelector('.key-input')?.focus();
@@ -379,7 +585,7 @@
     panel.className = 'panel';
     const title = document.createElement('div');
     title.className = 'panel-title';
-    title.textContent = 'StepFun API Key 设置';
+    title.textContent = 'StepFun API Key 与缓存设置';
     const status = document.createElement('div');
     status.className = 'panel-status';
     const current = getAsrApiKey();
@@ -416,22 +622,59 @@
     const hint = document.createElement('div');
     hint.className = 'panel-hint';
     hint.textContent = 'Key 仅保存在浏览器本地，用于无字幕视频的语音识别兜底，不会上传到其他服务器。';
+
+    const ttlLabel = document.createElement('div');
+    ttlLabel.className = 'panel-label';
+    ttlLabel.textContent = '字幕缓存留存时间';
+    const ttlSelect = document.createElement('select');
+    ttlSelect.className = 'ttl-select';
+    CACHE_TTL_OPTIONS.forEach(option => {
+      const item = document.createElement('option');
+      item.value = String(option.value);
+      item.textContent = option.label;
+      ttlSelect.appendChild(item);
+    });
+    ttlSelect.value = String(getCacheTtlMs());
+    const cacheLine = document.createElement('div');
+    cacheLine.className = 'cache-line';
+    const cacheInfo = document.createElement('span');
+    const clearCacheButton = document.createElement('button');
+    clearCacheButton.textContent = '清除缓存';
+    const refreshCacheLine = () => {
+      const count = listCacheKeys().length;
+      const sessionCount = (() => {
+        try {
+          return Object.keys(sessionStorage).filter(key => key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX)).length;
+        } catch (_) {
+          return 0;
+        }
+      })();
+      cacheInfo.textContent = `已缓存 ${count + sessionCount} 条字幕/识别结果`;
+    };
+    refreshCacheLine();
+    cacheLine.appendChild(cacheInfo);
+    cacheLine.appendChild(clearCacheButton);
+
     panel.appendChild(title);
     panel.appendChild(status);
     panel.appendChild(input);
     panel.appendChild(testResult);
     panel.appendChild(row);
     panel.appendChild(hint);
+    panel.appendChild(ttlLabel);
+    panel.appendChild(ttlSelect);
+    panel.appendChild(cacheLine);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
     input.focus();
 
     saveButton.addEventListener('click', () => {
       setAsrApiKey(input.value);
+      GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
       const value = getAsrApiKey();
       status.textContent = value ? `当前已设置：${value.slice(0, 4)}****${value.slice(-4)}` : '当前未设置 Key';
-      showToast(value ? 'StepFun API Key 已保存' : '已清除 StepFun API Key');
-      if (value) closeKeyConfigPanel();
+      showToast(value ? '设置已保存' : '已清除 StepFun API Key');
+      if (value && Number(ttlSelect.value) === 0) closeKeyConfigPanel();
     });
     clearButton.addEventListener('click', () => {
       setAsrApiKey('');
@@ -461,44 +704,19 @@
       }
     });
     cancelButton.addEventListener('click', closeKeyConfigPanel);
+    ttlSelect.addEventListener('change', () => {
+      GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
+      refreshCacheLine();
+      showToast('缓存留存时间已更新');
+    });
+    clearCacheButton.addEventListener('click', () => {
+      clearAllCaches();
+      refreshCacheLine();
+      showToast('已清除全部字幕缓存');
+    });
     overlay.addEventListener('click', event => {
       if (event.target === overlay) closeKeyConfigPanel();
     });
-  }
-
-  // 测试 Key 连通性：优先浏览器请求，失败时回退油猴请求（不受跨域限制）。
-  async function testAsrKeyConnection(apiKey) {
-    try {
-      const response = await fetch(ASR_MODELS_ENDPOINT, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        cache: 'no-store',
-      });
-      if (response.ok) return '连接成功，Key 可用';
-      if (response.status === 401 || response.status === 403) return `连接失败：Key 无效（HTTP ${response.status}）`;
-      return `连接异常：HTTP ${response.status}`;
-    } catch (error) {
-      if (typeof GM_xmlhttpRequest !== 'function') {
-        return `连接失败：${error.message || error}`;
-      }
-      try {
-        const status = await new Promise((resolve, reject) => {
-          GM_xmlhttpRequest({
-            method: 'GET',
-            url: ASR_MODELS_ENDPOINT,
-            timeout: 15000,
-            headers: { Authorization: `Bearer ${apiKey}` },
-            onload: response => resolve(response.status),
-            ontimeout: () => reject(new Error('油猴请求超时')),
-            onerror: () => reject(new Error('油猴请求失败')),
-          });
-        });
-        if (status >= 200 && status < 300) return '连接成功，Key 可用';
-        if (status === 401 || status === 403) return `连接失败：Key 无效（HTTP ${status}）`;
-        return `连接异常：HTTP ${status}`;
-      } catch (gmError) {
-        return `连接失败：${gmError.message || gmError}`;
-      }
-    }
   }
 
   function closeKeyConfigPanel() {
@@ -567,7 +785,273 @@
     document.getElementById(PROGRESS_PANEL_ID)?.remove();
   }
 
-  async function fetchAudioTrack(video) {
+  // ===== 视频信息 =====
+
+  function getIdFromPage() {
+    const state = unsafeWindowOrWindow().__INITIAL_STATE__ || {};
+    const playInfo = unsafeWindowOrWindow().__playinfo__?.data || {};
+    const videoData = state.videoData || {};
+    const epInfo = state.epInfo || {};
+    const urlBvid = location.pathname.match(/BV[\w]+/i)?.[0];
+    const pageNumber = Math.max(1, Number(new URL(location.href).searchParams.get('p')) || Number(state.p) || 1);
+    const currentPage = videoData.pages?.find(page => Number(page.page) === pageNumber);
+
+    return {
+      // URL 和当前播放信息在 B 站单页切换时通常比旧的 INITIAL_STATE 更快更新。
+      bvid: urlBvid || playInfo.bvid || videoData.bvid || state.bvid || '',
+      aid: playInfo.aid || videoData.aid || state.aid || epInfo.aid || 0,
+      // 选集切换后 URL 的 p 参数对应 pages，优先使用该分 P 的 cid；其余状态可能仍停留在上一集。
+      cid: currentPage?.cid || epInfo.cid || playInfo.cid || videoData.cid || state.cid || 0,
+    };
+  }
+
+  function getYouTubeVideoId() {
+    const fromUrl = new URL(location.href).searchParams.get('v');
+    if (fromUrl) return fromUrl;
+    const fromState = unsafeWindowOrWindow().ytInitialPlayerResponse?.videoDetails?.videoId;
+    return fromState || '';
+  }
+
+  function unsafeWindowOrWindow() {
+    return typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
+  }
+
+  function resolveCurrentVideo() {
+    if (site === 'youtube') {
+      const videoId = getYouTubeVideoId();
+      if (videoId) return { site: 'youtube', bvid: videoId, aid: 0, cid: 0 };
+      throw new Error('没有识别到当前 YouTube 视频，请刷新页面后重试');
+    }
+    const pageIds = getIdFromPage();
+    if (pageIds.cid && (pageIds.bvid || pageIds.aid)) return { site: 'bilibili', ...pageIds };
+    throw new Error('没有从当前播放器识别到视频编号，请刷新页面后重试');
+  }
+
+  function videoCacheKey(video) {
+    return `${video.bvid || `av${video.aid}`}:${video.cid}`;
+  }
+
+  // ===== 字幕元数据 =====
+
+  function findPlayerSubtitleApiUrl(video) {
+    performance.getEntriesByType('resource').forEach(entry => rememberPlayerApiUrl(entry.name));
+    for (let index = playerApiUrls.length - 1; index >= 0; index -= 1) {
+      try {
+        const url = new URL(playerApiUrls[index]);
+        if (Number(url.searchParams.get('cid')) !== Number(video.cid)) continue;
+        if (video.aid && Number(url.searchParams.get('aid')) !== Number(video.aid)) continue;
+        return url.href;
+      } catch (_) {
+        // Ignore non-URL performance entries.
+      }
+    }
+    return '';
+  }
+
+  // 播放器侧音频地址请求兜底：无签名直连被风控时，直接复用播放器已经拿到的带签名链接。
+  function findCapturedPlayApiUrl(video) {
+    performance.getEntriesByType('resource').forEach(entry => rememberPlayerPlayApiUrl(entry.name));
+    for (let index = playerPlayApiUrls.length - 1; index >= 0; index -= 1) {
+      try {
+        const url = new URL(playerPlayApiUrls[index]);
+        if (Number(url.searchParams.get('cid')) !== Number(video.cid)) continue;
+        if (video.aid && Number(url.searchParams.get('aid')) !== Number(video.aid)) continue;
+        return url.href;
+      } catch (_) {
+        // Ignore non-URL performance entries.
+      }
+    }
+    return '';
+  }
+
+  async function waitForPlayerSubtitleApiUrl(video) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const url = findPlayerSubtitleApiUrl(video);
+      if (url) return url;
+      await new Promise(resolve => window.setTimeout(resolve, 100));
+    }
+    throw new Error('播放器字幕信息尚未加载，请等待视频开始播放后重试');
+  }
+
+  async function fetchLegacySubtitleMeta(video) {
+    const query = new URLSearchParams({ cid: String(video.cid) });
+    if (video.bvid) query.set('bvid', video.bvid);
+    else query.set('aid', String(video.aid));
+    const result = await requestJson(`https://api.bilibili.com/x/player/v2?${query}`);
+    if (result.code !== 0) throw new Error(result.message || '无法读取字幕列表');
+    return Array.isArray(result.data?.subtitle?.subtitles) ? result.data.subtitle.subtitles : [];
+  }
+
+  // YouTube：ANDROID 客户端的 innertube player 响应，字幕 URL 无需 po token 且音频为直链。
+  async function fetchYouTubePlayerData(video) {
+    return requestJsonPost(YOUTUBE_PLAYER_API(video.bvid), {
+      context: { client: YOUTUBE_CLIENT },
+      videoId: video.bvid,
+    });
+  }
+
+  function mapYouTubeCaptionTracks(playerData) {
+    const renderer = playerData?.captions?.playerCaptionsTracklistRenderer;
+    const tracks = renderer?.captionTracks;
+    if (!Array.isArray(tracks)) return [];
+    return tracks.map(track => {
+      const name = track.name?.simpleText
+        || (track.name?.runs || []).map(run => run.text).join('')
+        || track.languageCode;
+      return {
+        lan: track.languageCode || '',
+        lan_doc: name,
+        subtitle_url: track.baseUrl || '',
+        isAsr: track.kind === 'asr',
+      };
+    }).filter(track => track.subtitle_url);
+  }
+
+  async function fetchYouTubeSubtitleMeta(video) {
+    const playerData = await fetchYouTubePlayerData(video);
+    const playability = playerData?.playabilityStatus?.status;
+    if (playability && playability !== 'OK') {
+      throw new Error(playerData?.playabilityStatus?.reason || '视频不可播放');
+    }
+    return mapYouTubeCaptionTracks(playerData);
+  }
+
+  async function fetchSubtitleMeta(video) {
+    const cacheKey = videoCacheKey(video);
+    const cached = readCache(META_CACHE_PREFIX, cacheKey);
+    if (cached) return cached;
+    let subtitles;
+    if (video.site === 'youtube') {
+      subtitles = await fetchYouTubeSubtitleMeta(video);
+    } else {
+      try {
+        const playerApiUrl = await waitForPlayerSubtitleApiUrl(video);
+        const result = await requestJson(playerApiUrl);
+        if (result.code !== 0) throw new Error(result.message || '无法读取播放器字幕列表');
+        subtitles = result.data?.subtitle?.subtitles;
+      } catch (error) {
+        // SPA 切换分 P 时播放器可能暂时不重发签名请求，使用当前 cid 的兼容接口兜底。
+        console.warn('[复制字幕] 当前选集播放器请求未出现，尝试按当前 cid 读取', error);
+        subtitles = await fetchLegacySubtitleMeta(video);
+      }
+    }
+    if (!Array.isArray(subtitles) || subtitles.length === 0) return [];
+    writeCache(META_CACHE_PREFIX, cacheKey, subtitles);
+    return subtitles;
+  }
+
+  function subtitleLanguageLabel(subtitle) {
+    return subtitle.lan_doc || subtitle.lan || '未知语言';
+  }
+
+  function isChineseSubtitle(subtitle) {
+    return /^(zh|ai-zh)/i.test(subtitle?.lan || '') || /中文|汉语|简体|繁体/.test(subtitle?.lan_doc || '');
+  }
+
+  function isGeneratedSubtitle(subtitle) {
+    return /ai-/.test(subtitle?.lan || '') || !!subtitle?.isAsr;
+  }
+
+  function chooseSubtitle(subtitles, selectedLanguage = 'auto') {
+    if (!Array.isArray(subtitles) || subtitles.length === 0) return null;
+    if (selectedLanguage && selectedLanguage !== 'auto') {
+      const exact = subtitles.find(subtitle => subtitle.lan === selectedLanguage);
+      if (exact) return exact;
+    }
+    return subtitles.find(isChineseSubtitle)
+      || subtitles.find(subtitle => !isGeneratedSubtitle(subtitle))
+      || subtitles[0];
+  }
+
+  function populateLanguageSelect(subtitles, videoKey) {
+    const select = document.getElementById(SELECT_ID);
+    if (!select) return;
+    const previous = select.dataset.videoKey === videoKey ? (select.value || 'auto') : 'auto';
+    select.replaceChildren();
+    const autoOption = document.createElement('option');
+    autoOption.value = 'auto';
+    autoOption.textContent = '中文（默认）';
+    select.appendChild(autoOption);
+    subtitles.forEach((subtitle, index) => {
+      const option = document.createElement('option');
+      option.value = subtitle.lan || `index:${index}`;
+      option.textContent = subtitleLanguageLabel(subtitle);
+      select.appendChild(option);
+    });
+    select.value = [...select.options].some(option => option.value === previous) ? previous : 'auto';
+    select.dataset.videoKey = videoKey;
+  }
+
+  // YouTube 字幕 XML 解析（兼容 <p t= d=> 与 <text start= dur=> 两种格式）。
+  function decodeXmlEntities(text) {
+    return text
+      .replace(/<[^>]*>/g, '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#0*39;/g, "'")
+      .replace(/&hellip;/g, '…')
+      .replace(/&amp;/g, '&')
+      .replace(/&#(\d+);/g, (match, code) => String.fromCharCode(Number(code)))
+      .replace(/&#x([0-9a-f]+);/gi, (match, code) => String.fromCharCode(parseInt(code, 16)));
+  }
+
+  function parseYouTubeTranscriptXml(xml) {
+    const body = [];
+    const push = (startMs, durationMs, rawText) => {
+      const content = decodeXmlEntities(rawText).replace(/\s*\n\s*/g, '\n').trim();
+      if (!content) return;
+      body.push({ from: startMs / 1000, to: (startMs + durationMs) / 1000, content });
+    };
+    const pPattern = /<p\s+t="(\d+)"\s+d="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
+    const textPattern = /<text\s+start="([\d.]+)"(?:\s+dur="([\d.]+)")?[^>]*>([\s\S]*?)<\/text>/g;
+    let match;
+    while ((match = pPattern.exec(xml)) !== null) {
+      push(Number(match[1]), Number(match[2]), match[3]);
+    }
+    while ((match = textPattern.exec(xml)) !== null) {
+      const startSeconds = Number(match[1]) * 1000;
+      const durationSeconds = (Number(match[2]) || 0) * 1000;
+      push(startSeconds, durationSeconds, match[3]);
+    }
+    body.sort((a, b) => a.from - b.from);
+    return body;
+  }
+
+  async function fetchSubtitleBody(video, subtitle) {
+    if (video.site === 'youtube') {
+      const xml = await requestText(subtitle.subtitle_url);
+      return parseYouTubeTranscriptXml(xml);
+    }
+    const subtitleData = await requestJson(subtitle.subtitle_url, { credentials: 'omit' });
+    return subtitleData.body;
+  }
+
+  function normalizeSubtitle(body) {
+    const lines = (Array.isArray(body) ? body : [])
+      .map(item => String(item?.content ?? ''))
+      .map(line => line.replace(/\\N/gi, '\n').replace(/\r/g, '').trim())
+      .filter(Boolean);
+
+    let text = '';
+    for (const line of lines) {
+      if (!text) {
+        text = line;
+        continue;
+      }
+      const needsSpace = /[A-Za-z0-9]$/.test(text) && /^[A-Za-z0-9]/.test(line);
+      text += needsSpace ? ` ${line}` : line;
+    }
+    return text
+      .replace(/[ \t]*\n[ \t]*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  // ===== 音频获取 =====
+
+  async function fetchBilibiliAudioTrack(video) {
     const isBangumi = location.pathname.startsWith('/bangumi');
     const endpoint = isBangumi
       ? 'https://api.bilibili.com/pgc/player/web/playurl'
@@ -587,9 +1071,9 @@
     try {
       const result = await requestJson(`${endpoint}?${query}`);
       if (result.code === 0) data = result.data;
-      else console.warn('[Bilibili 复制字幕] 播放接口返回异常', result.code, result.message);
+      else console.warn('[复制字幕] 播放接口返回异常', result.code, result.message);
     } catch (error) {
-      console.warn('[Bilibili 复制字幕] 播放接口请求失败，尝试复用播放器请求', error);
+      console.warn('[复制字幕] 播放接口请求失败，尝试复用播放器请求', error);
     }
     if (!data?.dash) {
       const captured = findCapturedPlayApiUrl(video);
@@ -598,7 +1082,7 @@
           const result = await requestJson(captured);
           if (result.code === 0) data = result.data;
         } catch (error) {
-          console.warn('[Bilibili 复制字幕] 复用播放器音频请求失败', error);
+          console.warn('[复制字幕] 复用播放器音频请求失败', error);
         }
       }
     }
@@ -624,20 +1108,28 @@
     };
   }
 
-  // 播放器侧音频地址请求兜底：无签名直连被风控时，直接复用播放器已经拿到的带签名链接。
-  function findCapturedPlayApiUrl(video) {
-    performance.getEntriesByType('resource').forEach(entry => rememberPlayerPlayApiUrl(entry.name));
-    for (let index = playerPlayApiUrls.length - 1; index >= 0; index -= 1) {
-      try {
-        const url = new URL(playerPlayApiUrls[index]);
-        if (Number(url.searchParams.get('cid')) !== Number(video.cid)) continue;
-        if (video.aid && Number(url.searchParams.get('aid')) !== Number(video.aid)) continue;
-        return url.href;
-      } catch (_) {
-        // Ignore non-URL performance entries.
-      }
+  async function fetchYouTubeAudioTrack(video) {
+    const playerData = await fetchYouTubePlayerData(video);
+    const audioList = ((playerData?.streamingData?.adaptiveFormats) || [])
+      .filter(format => (format.mimeType || '').startsWith('audio/mp4') && format.url);
+    if (audioList.length === 0) {
+      throw new Error('未获取到音频流（该视频可能只有 opus 格式或需要登录）');
     }
-    return '';
+    // 语音识别不需要高码率，选体积最小的 m4a 以控制请求体大小；其余地址作为备用 CDN。
+    const sorted = audioList.slice().sort((a, b) => (a.bitrate || 0) - (b.bitrate || 0));
+    const best = sorted[0];
+    const backups = [...new Set(sorted.slice(1).map(format => format.url))];
+    return {
+      url: best.url,
+      backups,
+      duration: Number(playerData?.videoDetails?.lengthSeconds) || 0,
+      bandwidth: best.bitrate || 0,
+    };
+  }
+
+  async function fetchAudioTrack(video) {
+    if (video.site === 'youtube') return fetchYouTubeAudioTrack(video);
+    return fetchBilibiliAudioTrack(video);
   }
 
   function downloadByGM(url, onProgress) {
@@ -670,27 +1162,37 @@
   }
 
   // 优先油猴请求（可获取下载进度），失败后回退浏览器 fetch；每个地址都有备用 CDN。
-  async function downloadAudioBytes(track, onProgress) {
+  // 所有地址都失败时，直链可能已过期或被 CDN 节点拒绝，重新拉取播放数据换取新地址再试。
+  async function downloadAudioBytes(track, onProgress, refreshTrack) {
     let lastError = null;
-    for (const candidate of [track.url, ...track.backups]) {
-      let bytes = null;
-      if (typeof GM_xmlhttpRequest === 'function') {
-        try {
-          bytes = await downloadByGM(candidate, onProgress);
-        } catch (error) {
-          lastError = error;
-          console.warn('[Bilibili 复制字幕] 油猴下载失败，尝试浏览器下载', candidate, error);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (const candidate of [track.url, ...track.backups]) {
+        let bytes = null;
+        if (typeof GM_xmlhttpRequest === 'function') {
+          try {
+            bytes = await downloadByGM(candidate, onProgress);
+          } catch (error) {
+            lastError = error;
+            console.warn('[复制字幕] 油猴下载失败，尝试浏览器下载', candidate, error);
+          }
         }
-      }
-      if (!bytes) {
-        try {
-          bytes = await downloadByFetch(candidate);
-        } catch (error) {
-          lastError = error;
-          console.warn('[Bilibili 复制字幕] 音频下载失败，尝试下一个地址', candidate, error);
+        if (!bytes) {
+          try {
+            bytes = await downloadByFetch(candidate);
+          } catch (error) {
+            lastError = error;
+            console.warn('[复制字幕] 音频下载失败，尝试下一个地址', candidate, error);
+          }
         }
+        if (bytes) return bytes;
       }
-      if (bytes) return bytes;
+      if (!refreshTrack || attempt === 2) break;
+      try {
+        track = await refreshTrack();
+      } catch (error) {
+        console.warn('[复制字幕] 重新获取音频地址失败', error);
+        break;
+      }
     }
     throw new Error(`音频下载失败：${lastError?.message || lastError}`);
   }
@@ -831,13 +1333,14 @@
   async function transcribeVideoAudio(video, track) {
     const apiKey = getAsrApiKey();
     if (!apiKey) {
-      throw new Error('尚未设置 StepFun API Key，请在 Tampermonkey 菜单中设置');
+      throw new Error('尚未设置 StepFun API Key，请通过菜单设置');
     }
 
     updateProgress('正在下载音频', null, '连接中');
     const bytes = await downloadAudioBytes(track, (loaded, total) => {
       updateProgress('正在下载音频', total ? loaded / total : null, `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
-    });
+      // 全部直连失败时换取新的播放数据地址重试（URL 过期或 CDN 节点拒绝）。
+    }, () => fetchAudioTrack(video));
 
     const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
     const totalDurationMs = (track.duration || 0) * 1000;
@@ -885,7 +1388,6 @@
 
     try {
       const video = resolveCurrentVideo();
-      if (!video.cid) throw new Error('没有识别到当前分P');
       const videoKey = videoCacheKey(video);
       const subtitles = await fetchSubtitleMeta(video);
       if (videoCacheKey(resolveCurrentVideo()) !== videoKey) {
@@ -953,8 +1455,8 @@
       const bodyCacheKey = `${videoCacheKey(video)}:${subtitle.lan || url}`;
       let text = readCache(BODY_CACHE_PREFIX, bodyCacheKey);
       if (!text) {
-        const subtitleData = await requestJson(url, { credentials: 'omit' });
-        text = normalizeSubtitle(subtitleData.body);
+        const body = await fetchSubtitleBody(video, subtitle);
+        text = normalizeSubtitle(body);
         if (text) writeCache(BODY_CACHE_PREFIX, bodyCacheKey, text);
       }
       if (videoCacheKey(resolveCurrentVideo()) !== videoKey) {
@@ -963,10 +1465,10 @@
       if (!text) throw new Error('字幕内容为空');
 
       await writeClipboard(text);
-      const language = subtitle.lan_doc || subtitle.lan || '字幕';
+      const language = subtitleLanguageLabel(subtitle);
       showToast(`已复制${language}，共 ${text.length} 个字符`);
     } catch (error) {
-      console.error('[Bilibili 复制字幕]', error);
+      console.error('[复制字幕]', error);
       showToast(`复制失败：${error.message || error}`);
     } finally {
       hideProgressPanel();
@@ -975,171 +1477,6 @@
         button.textContent = '复制全部字幕';
       }
     }
-  }
-
-  function getIdFromPage() {
-    const state = unsafeWindowOrWindow().__INITIAL_STATE__ || {};
-    const playInfo = unsafeWindowOrWindow().__playinfo__?.data || {};
-    const videoData = state.videoData || {};
-    const epInfo = state.epInfo || {};
-    const urlBvid = location.pathname.match(/BV[\w]+/i)?.[0];
-    const pageNumber = Math.max(1, Number(new URL(location.href).searchParams.get('p')) || Number(state.p) || 1);
-    const currentPage = videoData.pages?.find(page => Number(page.page) === pageNumber);
-
-    return {
-      // URL 和当前播放信息在 B 站单页切换时通常比旧的 INITIAL_STATE 更快更新。
-      bvid: urlBvid || playInfo.bvid || videoData.bvid || state.bvid || '',
-      aid: playInfo.aid || videoData.aid || state.aid || epInfo.aid || 0,
-      // 选集切换后 URL 的 p 参数对应 pages，优先使用该分 P 的 cid；其余状态可能仍停留在上一集。
-      cid: currentPage?.cid || epInfo.cid || playInfo.cid || videoData.cid || state.cid || 0,
-    };
-  }
-
-  function unsafeWindowOrWindow() {
-    return typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
-  }
-
-  function resolveCurrentVideo() {
-    const pageIds = getIdFromPage();
-    if (pageIds.cid && (pageIds.bvid || pageIds.aid)) return pageIds;
-    throw new Error('没有从当前播放器识别到视频编号，请刷新页面后重试');
-  }
-
-  function videoCacheKey(video) {
-    return `${video.bvid || `av${video.aid}`}:${video.cid}`;
-  }
-
-  function readCache(prefix, key) {
-    const memory = memoryCache.get(`${prefix}${key}`);
-    if (memory) return memory.value;
-    try {
-      const raw = sessionStorage.getItem(`${prefix}${key}`);
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Object.prototype.hasOwnProperty.call(parsed, 'value')) return null;
-      memoryCache.set(`${prefix}${key}`, parsed);
-      return parsed.value;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function writeCache(prefix, key, value) {
-    const entry = { value, cachedAt: new Date().toISOString() };
-    memoryCache.set(`${prefix}${key}`, entry);
-    try { sessionStorage.setItem(`${prefix}${key}`, JSON.stringify(entry)); } catch (_) { /* storage may be disabled */ }
-  }
-
-  function findPlayerSubtitleApiUrl(video) {
-    performance.getEntriesByType('resource').forEach(entry => rememberPlayerApiUrl(entry.name));
-    for (let index = playerApiUrls.length - 1; index >= 0; index -= 1) {
-      try {
-        const url = new URL(playerApiUrls[index]);
-        if (Number(url.searchParams.get('cid')) !== Number(video.cid)) continue;
-        if (video.aid && Number(url.searchParams.get('aid')) !== Number(video.aid)) continue;
-        return url.href;
-      } catch (_) {
-        // Ignore non-URL performance entries.
-      }
-    }
-    return '';
-  }
-
-  async function waitForPlayerSubtitleApiUrl(video) {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const url = findPlayerSubtitleApiUrl(video);
-      if (url) return url;
-      await new Promise(resolve => window.setTimeout(resolve, 100));
-    }
-    throw new Error('播放器字幕信息尚未加载，请等待视频开始播放后重试');
-  }
-
-  async function fetchLegacySubtitleMeta(video) {
-    const query = new URLSearchParams({ cid: String(video.cid) });
-    if (video.bvid) query.set('bvid', video.bvid);
-    else query.set('aid', String(video.aid));
-    const result = await requestJson(`https://api.bilibili.com/x/player/v2?${query}`);
-    if (result.code !== 0) throw new Error(result.message || '无法读取字幕列表');
-    return Array.isArray(result.data?.subtitle?.subtitles) ? result.data.subtitle.subtitles : [];
-  }
-
-  async function fetchSubtitleMeta(video) {
-    const cacheKey = videoCacheKey(video);
-    const cached = readCache(META_CACHE_PREFIX, cacheKey);
-    if (cached) return cached;
-    let subtitles;
-    try {
-      const playerApiUrl = await waitForPlayerSubtitleApiUrl(video);
-      const result = await requestJson(playerApiUrl);
-      if (result.code !== 0) throw new Error(result.message || '无法读取播放器字幕列表');
-      subtitles = result.data?.subtitle?.subtitles;
-    } catch (error) {
-      // SPA 切换分 P 时播放器可能暂时不重发签名请求，使用当前 cid 的兼容接口兜底。
-      console.warn('[Bilibili 复制字幕] 当前选集播放器请求未出现，尝试按当前 cid 读取', error);
-      subtitles = await fetchLegacySubtitleMeta(video);
-    }
-    if (!Array.isArray(subtitles) || subtitles.length === 0) return [];
-    writeCache(META_CACHE_PREFIX, cacheKey, subtitles);
-    return subtitles;
-  }
-
-  function subtitleLanguageLabel(subtitle) {
-    return subtitle.lan_doc || subtitle.lan || '未知语言';
-  }
-
-  function isChineseSubtitle(subtitle) {
-    return /^(zh|ai-zh)/i.test(subtitle?.lan || '') || /中文|汉语|简体|繁体/.test(subtitle?.lan_doc || '');
-  }
-
-  function chooseSubtitle(subtitles, selectedLanguage = 'auto') {
-    if (!Array.isArray(subtitles) || subtitles.length === 0) return null;
-    if (selectedLanguage && selectedLanguage !== 'auto') {
-      const exact = subtitles.find(subtitle => subtitle.lan === selectedLanguage);
-      if (exact) return exact;
-    }
-    return subtitles.find(isChineseSubtitle)
-      || subtitles.find(subtitle => !/ai-/.test(subtitle.lan || ''))
-      || subtitles[0];
-  }
-
-  function populateLanguageSelect(subtitles, videoKey) {
-    const select = document.getElementById(SELECT_ID);
-    if (!select) return;
-    const previous = select.dataset.videoKey === videoKey ? (select.value || 'auto') : 'auto';
-    select.replaceChildren();
-    const autoOption = document.createElement('option');
-    autoOption.value = 'auto';
-    autoOption.textContent = '中文（默认）';
-    select.appendChild(autoOption);
-    subtitles.forEach((subtitle, index) => {
-      const option = document.createElement('option');
-      option.value = subtitle.lan || `index:${index}`;
-      option.textContent = subtitleLanguageLabel(subtitle);
-      select.appendChild(option);
-    });
-    select.value = [...select.options].some(option => option.value === previous) ? previous : 'auto';
-    select.dataset.videoKey = videoKey;
-  }
-
-  function normalizeSubtitle(body) {
-    const lines = (Array.isArray(body) ? body : [])
-      .map(item => String(item?.content ?? ''))
-      .map(line => line.replace(/\\N/gi, '\n').replace(/\r/g, '').trim())
-      .filter(Boolean);
-
-    let text = '';
-    for (const line of lines) {
-      if (!text) {
-        text = line;
-        continue;
-      }
-      const needsSpace = /[A-Za-z0-9]$/.test(text) && /^[A-Za-z0-9]/.test(line);
-      text += needsSpace ? ` ${line}` : line;
-    }
-    return text
-      .replace(/[ \t]*\n[ \t]*/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
   }
 
   function isHidden() {
@@ -1171,7 +1508,7 @@
   }
 
   GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
-  GM_registerMenuCommand('设置 StepFun API Key（无字幕视频语音识别）', openKeyConfigPanel);
+  GM_registerMenuCommand('设置 StepFun API Key 与缓存', openKeyConfigPanel);
   GM_registerMenuCommand('显示/隐藏页面按钮', () => {
     const hidden = !isHidden();
     localStorage.setItem(HIDDEN_KEY, hidden ? '1' : '0');
