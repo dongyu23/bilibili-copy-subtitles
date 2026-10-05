@@ -135,7 +135,7 @@ B 站会复用播放器当前页面已经发出的带签名字幕请求，避免
 ### 前置配置（一次性）
 
 - **StepFun API Key**：与另外两个站点共用，在设置面板填写。
-- **元宝 Cookie**：点设置面板里的 **打开元宝** 按钮并扫码登录 → 页面上按 `F12` 打开开发者工具 → `Application/应用` → `Cookies` → `yuanbao.tencent.com` → 全选复制（需包含 HttpOnly 项）→ 粘贴到设置面板的「元宝 Cookie」输入框 → 保存。Cookie 过期后按同样方式更新即可。
+- **元宝 Cookie**：点设置面板里的 **打开元宝** 按钮并扫码登录，然后点 **一键读取 Cookie** 即可自动读取全部字段（含 HttpOnly，已自动过滤统计类参数）并保存。若自动读取不可用（非 Tampermonkey 管理器），再按 `F12` → `Application/应用` → `Cookies` → `yuanbao.tencent.com` 全选复制，粘贴到设置面板的「元宝 Cookie」输入框。Cookie 过期后按同样方式更新即可。
 - 两个接口都要求在浏览器环境内调用（服务端有 TLS 指纹校验），因此必须通过油猴脚本发起，不能用命令行工具替代。
 
 ### 工作方式与限制
@@ -165,6 +165,7 @@ https://yuanbao.tencent.com/*
 | `GM_addStyle` | 显示页面按钮和操作提示 |
 | `GM_registerMenuCommand` | 提供复制、视频号转文字、设置及按钮显示开关 |
 | `GM_xmlhttpRequest` | 原生请求失败时读取字幕文件、下载音频；视频号解析与视频下载 |
+| `GM_cookie` | 一键读取元宝登录 Cookie（含 HttpOnly） |
 | `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues` | 保存 API Key、识别端点/语言、调试开关、元宝 Cookie 与缓存留存时间 |
 | `unsafeWindow` | 获取当前视频及分P编号 |
 | `api.bilibili.com` | 获取当前视频的字幕列表与音频流地址 |

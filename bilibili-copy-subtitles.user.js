@@ -23,6 +23,7 @@
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_listValues
+// @grant        GM_cookie
 // @grant        unsafeWindow
 // @connect      api.bilibili.com
 // @connect      aisubtitle.hdslb.com
@@ -139,6 +140,33 @@
 
   function debugLog(...args) {
     if (getDebugEnabled()) console.log('[复制字幕][调试]', ...args);
+  }
+
+  // GM_cookie 是回调式 API（个别版本返回 Promise），统一包成 Promise。
+  function gmCookieList(details) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_cookie === 'undefined' || typeof GM_cookie.list !== 'function') {
+        reject(new Error('当前脚本管理器不支持 GM_cookie'));
+        return;
+      }
+      const maybe = GM_cookie.list(details, cookies => resolve(cookies || []));
+      if (maybe && typeof maybe.then === 'function') maybe.then(resolve, reject);
+    });
+  }
+
+  // 统计/追踪类 Cookie 对接口解析没有用处，读取时过滤掉，只保留有效字段。
+  const COOKIE_NOISE_PATTERN = /^(_qimei|_ga|_gid|_gat|_gtag|_TDID|_gcl|_fbp|_hj|_paq)/i;
+
+  // 通过油猴特权读取元宝域下全部 Cookie（含 HttpOnly，网页本身读不到），过滤后拼成 Cookie 头。
+  async function readYuanbaoCookieAutomatically() {
+    const cookies = await gmCookieList({ url: YUANBAO_HOME, domain: 'yuanbao.tencent.com' });
+    const useful = (cookies || []).filter(cookie => cookie && cookie.name && !COOKIE_NOISE_PATTERN.test(cookie.name));
+    if (useful.length === 0) {
+      throw new Error('未读取到元宝 Cookie，请先点「打开元宝」并登录');
+    }
+    const cookieString = useful.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+    debugLog('自动读取元宝 Cookie', { total: (cookies || []).length, useful: useful.length });
+    return { cookieString, total: (cookies || []).length, useful: useful.length };
   }
 
   function rememberPlayerApiUrl(value) {
@@ -824,14 +852,18 @@
     const openYuanbaoButton = document.createElement('button');
     openYuanbaoButton.textContent = '打开元宝';
     openYuanbaoButton.className = 'ghost';
+    const readCookieButton = document.createElement('button');
+    readCookieButton.textContent = '一键读取 Cookie';
+    readCookieButton.className = 'ghost';
     const clearCookieButton = document.createElement('button');
     clearCookieButton.textContent = '清空 Cookie';
     clearCookieButton.className = 'ghost';
     wxRow.appendChild(openYuanbaoButton);
+    wxRow.appendChild(readCookieButton);
     wxRow.appendChild(clearCookieButton);
     const wxHint = document.createElement('div');
     wxHint.className = 'panel-hint';
-    wxHint.textContent = '获取方式：点「打开元宝」并扫码登录 → 页面上按 F12 → 开发者工具 Application/应用 → Cookies → yuanbao.tencent.com → 全选复制粘贴到此处。视频号分享链接经元宝接口解析出视频直链，Cookie 过期后需重新获取。';
+    wxHint.textContent = '获取方式：先在元宝登录（点「打开元宝」扫码），再点「一键读取 Cookie」自动填入并保存（自动过滤统计类字段）；若自动读取不可用，再按 F12 → Application/应用 → Cookies → yuanbao.tencent.com 全选复制（需包含 HttpOnly 项）。视频号分享链接经元宝接口解析出视频直链，Cookie 过期后需重新获取。';
 
     // ---- 分区：调试 ----
     const debugLabel = document.createElement('div');
@@ -948,7 +980,22 @@
     cancelButton.addEventListener('click', closeSettingsPanel);
     openYuanbaoButton.addEventListener('click', () => {
       if (typeof window.open === 'function') window.open(YUANBAO_HOME, '_blank', 'noopener');
-      showToast('已打开元宝，登录后按 F12 复制 Cookie');
+      showToast('已打开元宝，登录后点「一键读取 Cookie」');
+    });
+    readCookieButton.addEventListener('click', async () => {
+      readCookieButton.disabled = true;
+      readCookieButton.textContent = '读取中…';
+      try {
+        const { cookieString, useful } = await readYuanbaoCookieAutomatically();
+        cookieInput.value = cookieString;
+        GM_setValue(YUANBAO_COOKIE_SETTING, cookieString);
+        showToast(`已读取并保存 ${useful} 个 Cookie 字段（已过滤统计类）`);
+      } catch (error) {
+        showToast(`自动读取失败：${error.message || error}，请按提示用 F12 手动复制`);
+      } finally {
+        readCookieButton.disabled = false;
+        readCookieButton.textContent = '一键读取 Cookie';
+      }
     });
     clearCookieButton.addEventListener('click', () => {
       cookieInput.value = '';
