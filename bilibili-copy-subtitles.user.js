@@ -225,22 +225,22 @@
       transition: background .18s ease, color .18s ease;
     }
     #${WX_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
-    /* 设置入口：刻意弱化的齿轮，平时不显眼。 */
+    /* 设置入口：刻意弱化的齿轮，平时不显眼；淡底保证暗色主题下也找得到。 */
     #${SETTINGS_BUTTON_ID} {
-      width: 26px;
-      min-height: 22px;
+      width: 28px;
+      min-height: 24px;
       align-self: flex-end;
       padding: 0;
       border: 0;
       border-radius: 5px;
       color: #9499a0;
-      background: transparent;
-      font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: rgba(127, 127, 127, .14);
+      font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       cursor: pointer;
-      opacity: .38;
-      transition: opacity .18s ease, color .18s ease;
+      opacity: .6;
+      transition: opacity .18s ease, color .18s ease, background .18s ease;
     }
-    #${SETTINGS_BUTTON_ID}:hover { opacity: 1; color: #61666d; }
+    #${SETTINGS_BUTTON_ID}:hover { opacity: 1; color: #61666d; background: rgba(127, 127, 127, .26); }
     #${WX_PANEL_ID} {
       position: fixed;
       z-index: 100002;
