@@ -28,6 +28,7 @@
 // @connect      aisubtitle.hdslb.com
 // @connect      *.hdslb.com
 // @connect      *.bilivideo.com
+// @connect      *.akamaized.net
 // @connect      api.stepfun.com
 // @connect      www.youtube.com
 // @connect      *.googlevideo.com
@@ -745,28 +746,43 @@
   }
 
   // 带 Range 的请求；CDN 忽略 Range 返回 200 全量时直接拒绝（调用方走兜底）
-  function gmRangeRequest(url, start, end) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url,
-        headers: end == null ? { Range: `bytes=${start}-` } : { Range: `bytes=${start}-${end}` },
-        responseType: 'arraybuffer',
-        timeout: 120000,
-        onload: r => {
-          if (r.status !== 206 && r.status !== 200) { reject(new Error(`HTTP ${r.status}`)); return; }
-          if (r.status === 200 && start > 0) { reject(new Error('CDN 不支持 Range')); return; }
-          const bytes = new Uint8Array(r.response || []);
-          if (start > 0 && bytes.length > PROBE_BYTES * 8) { reject(new Error('CDN 忽略 Range 返回全量')); return; }
-          let total = null;
-          const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.responseHeaders || '');
-          if (m) total = Number(m[1]);
-          resolve({ bytes, total });
-        },
-        onerror: () => reject(new Error('网络错误')),
-        ontimeout: () => reject(new Error('请求超时')),
+  async function gmRangeRequest(url, start, end) {
+    const rangeValue = end == null ? `bytes=${start}-` : `bytes=${start}-${end}`;
+    let host = url;
+    try { host = new URL(url).host; } catch (_) { /* ignore */ }
+    // 优先油猴特权请求（无跨域限制）；失败回退页面 fetch（Range 是 CORS 安全头，不触发预检）
+    try {
+      return await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          headers: { Range: rangeValue },
+          responseType: 'arraybuffer',
+          timeout: 120000,
+          onload: r => {
+            if (r.status !== 206 && r.status !== 200) { reject(new Error(`HTTP ${r.status}（${host}）`)); return; }
+            if (r.status === 200 && start > 0) { reject(new Error('CDN 不支持 Range')); return; }
+            const bytes = new Uint8Array(r.response || []);
+            if (start > 0 && bytes.length > PROBE_BYTES * 8) { reject(new Error('CDN 忽略 Range 返回全量')); return; }
+            let total = null;
+            const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.responseHeaders || '');
+            if (m) total = Number(m[1]);
+            resolve({ bytes, total });
+          },
+          onerror: () => reject(new Error(`油猴请求失败（${host}）`)),
+          ontimeout: () => reject(new Error(`请求超时（${host}）`)),
+        });
       });
-    });
+    } catch (gmError) {
+      console.warn('[复制字幕] 油猴 Range 请求失败，回退页面 fetch', gmError.message);
+      const resp = await fetch(url, { headers: { Range: rangeValue }, cache: 'no-store' });
+      if (!resp.ok && resp.status !== 206) throw new Error(`HTTP ${resp.status}（${host}）`);
+      if (resp.status === 200 && start > 0) throw new Error('CDN 不支持 Range');
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      if (start > 0 && bytes.length > PROBE_BYTES * 8) throw new Error('CDN 忽略 Range 返回全量');
+      const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(resp.headers.get('Content-Range') || '');
+      return { bytes, total: m ? Number(m[1]) : null };
+    }
   }
 
   // 取音频头部（ftyp+moov+sidx）与 timescale
@@ -2145,10 +2161,42 @@
     const selHash = selectionHash(selection);
 
     updateProgress('正在读取音频结构', null, '');
-    const headerInfo = await fetchAudioHeader(track.url);
-    const totalSize = headerInfo.total;
-    if (!totalSize) throw new Error('无法确定音频总大小（CDN 未返回 Content-Range）');
+    let headerInfo = null;
+    try {
+      headerInfo = await fetchAudioHeader(track.url);
+    } catch (error) {
+      console.warn('[复制字幕] 流式管线初始化失败，回退整文件下载', error);
+    }
+    const totalSize = headerInfo ? (headerInfo.total || 0) : 0;
     const totalMs = (track.duration || 0) * 1000;
+
+    // 兜底：流式管线不可用时退回 v1 的整文件下载（内存占用高；章节选择降级为全篇）
+    if (!headerInfo || !totalSize) {
+      const degraded = !!(selection && selection.mode === 'chapters');
+      if (degraded) showToast('分段下载不可用，已回退整片识别（本次忽略章节选择）');
+      updateProgress('正在下载音频', null, '');
+      const bytes = await downloadAudioBytes(track, (loaded, total) => {
+        updateProgress('正在下载音频', total ? loaded / total : null,
+          `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
+      }, () => fetchAudioTrack(video));
+      const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
+      const fallbackHash = 'full-dl';
+      const texts = await mapWithBudget(async function* iterateChunks() { for (const c of chunks) yield c; },
+        async (chunk, idx) => {
+          const ck = checkpointKey(videoKey, fallbackHash, 0, idx);
+          const cached = readCheckpoint(ck);
+          if (cached != null) return cached;
+          const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
+          writeCheckpoint(ck, text);
+          return text;
+        }, ASR_INFLIGHT_BUDGET);
+      clearCheckpointsFor(videoKey, fallbackHash);
+      return {
+        text: normalizeSubtitle([{ content: texts.filter(t => typeof t === 'string').join('') }]),
+        chunkCount: texts.length,
+        degraded,
+      };
+    }
 
     // 组装字节区间：全篇或按章节（时间 -> 字节二分定位，重叠区间合并）
     let ranges;
@@ -2688,6 +2736,7 @@
         const fromCache = !!text;
         const startedAt = Date.now();
         let chunkCount = 1;
+        let asrDegraded = false;
         if (!text) {
           showProgressPanel();
           try {
@@ -2707,6 +2756,7 @@
             clearCheckpointsFor(videoKey, selHash);
             text = result.text;
             chunkCount = result.chunkCount;
+            asrDegraded = !!result.degraded;
           } finally {
             hideProgressPanel();
           }
@@ -2725,7 +2775,7 @@
             at: Date.now(),
           });
         }
-        if (text) writeCache(BODY_CACHE_PREFIX, asrCacheKey, text);
+        if (text && !asrDegraded) writeCache(BODY_CACHE_PREFIX, asrCacheKey, text);
         await writeClipboard(text);
         showToast(fromCache
           ? `已通过语音识别复制，共 ${text.length} 个字符（标签页缓存）`
