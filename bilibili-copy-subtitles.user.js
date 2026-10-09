@@ -106,11 +106,10 @@
   const CHAPTER_CACHE_PREFIX = 'video-chapters-v1:';
   const CHECKPOINT_PREFIX = 'asr-checkpoint-v2:';
   const CHECKPOINT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-  const AUDIO_WINDOW_BYTES = 32 * 1024 * 1024;   // 流式下载滑动窗口
+  const AUDIO_WINDOW_BYTES = 8 * 1024 * 1024;    // 流式下载滑动窗口（本页执行取小值控制峰值内存）
   const ASR_INFLIGHT_BUDGET = 24 * 1024 * 1024;  // 在途分片总字节上限（控制并发瞬态）
   const PROBE_BYTES = 128 * 1024;                // 时间->字节 探测窗口（128KB 足够容纳多个音频分片）
   const LONG_VIDEO_WARN_S = 3600;                // 超过 1 小时给出提示
-  const WORKER_TAB_NAME = 'bili-asr-worker';
 
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
   const KEY_PANEL_ID = 'bili-copy-asr-key-panel';
@@ -1000,6 +999,27 @@
     }
   }
 
+  // ===== 本页执行的性能护栏：确保识别不会拖死页面 =====
+  function heapInfo() {
+    try {
+      const m = performance.memory;
+      return m ? { used: m.usedJSHeapSize, limit: m.jsHeapSizeLimit } : null;
+    } catch (_) { return null; }
+  }
+  const sleep0 = () => new Promise(r => setTimeout(r, 0));
+  async function heapGuard(stageText) {
+    const h = heapInfo();
+    if (!h || !h.limit) return;
+    const ratio = h.used / h.limit;
+    if (ratio > 0.8) {
+      throw new Error(`内存占用已达上限的 ${Math.round(ratio * 100)}%，为保护页面已中止识别；重试时会自动跳过已完成的分片`);
+    }
+    if (ratio > 0.6) {
+      updateProgress('内存偏高，暂停 2 秒等待回收…', null, stageText || '');
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
   // 有界并发：在途总字节不超过预算，顺序由 index 保证
   async function mapWithBudget(iter, fn, budgetBytes) {
     const out = [];
@@ -1183,271 +1203,6 @@
   }
 
   // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
-  // 工作标签页驱动器（注入到 about:blank 中执行，无 CSP、无第三方脚本、不可能被跳转）
-  const WORKER_DRIVER = `
-    let __endpoint = '', __language = '', __lastJob = '';
-    function getAsrEndpoint() { return __endpoint; }
-    function getAsrLanguage() { return __language; }
-    function setStatus(t) { const el = document.getElementById('asr-worker-status'); if (el) el.textContent = String(t || ''); }
-    function post(m) { try { (window.opener || window.parent).postMessage(Object.assign({ type: 'asr-progress' }, m), '*'); } catch (e) { /* ignore */ } }
-    function emit(m) { try { document.getElementById('asr-result-slot').textContent = JSON.stringify(m); } catch (e) { /* ignore */ } }
-    function stage(t, f, d) { setStatus(t); post({ stage: 'progress', text: t, fraction: (typeof f === 'number') ? f : null, detail: d || '' }); }
-
-    async function runJob(data) {
-      const totalMs = (data.track && data.track.duration ? data.track.duration : 0) * 1000;
-      stage('正在读取音频结构', null, '');
-      const headerInfo = await fetchAudioHeader(data.track.url);
-      const totalSize = headerInfo.total;
-      if (!totalSize) throw new Error('无法确定音频总大小（CDN 未返回 Content-Range）');
-      let ranges;
-      if (!data.selection || data.selection.mode === 'full') {
-        ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY, start: 0, end: totalSize }];
-      } else {
-        const rs = data.selection.ranges;
-        const picked = [];
-        for (let bi = 0; bi < rs.length; bi++) {
-          stage('正在定位章节边界 ' + (bi + 1) + '/' + rs.length + '：' + (rs[bi].title || ''), bi / rs.length, '');
-          const s = await findByteForTime(data.track.url, totalSize, rs[bi].startMs, headerInfo);
-          const e = rs[bi].endMs >= totalMs ? totalSize : await findByteForTime(data.track.url, totalSize, rs[bi].endMs, headerInfo);
-          picked.push({ title: rs[bi].title, startMs: rs[bi].startMs, endMs: rs[bi].endMs, start: s, end: Math.max(e, s + 4096) });
-        }
-        picked.sort((a, b) => a.start - b.start);
-        ranges = [];
-        for (const r of picked) {
-          const last = ranges[ranges.length - 1];
-          if (last && r.start - last.end < 1024 * 1024) {
-            last.end = Math.max(last.end, r.end);
-            last.title = last.title ? last.title + ' + ' + r.title : r.title;
-          } else ranges.push(Object.assign({}, r));
-        }
-      }
-      const totalRangeBytes = ranges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0) || 1;
-      let doneRangeBytes = 0;
-      const results = [];
-      let chunkCount = 0;
-      for (let ri = 0; ri < ranges.length; ri++) {
-        const range = ranges[ri];
-        const rangeBytes = Math.max(1, range.end - range.start);
-        const texts = await mapWithBudget(
-          streamRangeChunks(data.track.url, headerInfo, range, MAX_AUDIO_CHUNK_BYTES,
-            f => stage('正在下载音频', Math.min(1, (doneRangeBytes + f * rangeBytes) / totalRangeBytes),
-              ranges.length > 1 ? '第 ' + (ri + 1) + '/' + ranges.length + ' 段' : ''), null),
-          async (chunk, idx) => {
-            const ck = ri + ':' + idx;
-            if (data.checkpoints && Object.prototype.hasOwnProperty.call(data.checkpoints, ck)) return data.checkpoints[ck];
-            const text = await transcribeAudioChunk(chunk, data.apiKey, () => stage('正在识别', null, ''));
-            post({ stage: 'chunkDone', ri, idx, text });
-            return text;
-          }, ASR_INFLIGHT_BUDGET);
-        chunkCount += texts.length;
-        doneRangeBytes += rangeBytes;
-        results.push({ title: range.title, text: texts.filter(t => typeof t === 'string').join('') });
-      }
-      const assembled = results.length === 1 && !results[0].title
-        ? results[0].text
-        : results.map(r => (r.title ? '【' + r.title + '】\n' + r.text : r.text)).join('\n');
-      return { text: normalizeSubtitle([{ content: assembled }]), chunkCount };
-    }
-
-    async function handleJob(d) {
-      __endpoint = d.endpoint;
-      __language = d.language;
-      setStatus('已接收任务');
-      try {
-        const r = await runJob(d);
-        setStatus('识别完成，正在回传结果…');
-        post({ stage: 'done', text: r.text, chunkCount: r.chunkCount });
-        emit({ stage: 'done', text: r.text, chunkCount: r.chunkCount });
-      } catch (err) {
-        setStatus('识别失败：' + ((err && err.message) || err));
-        post({ stage: 'error', message: String((err && err.message) || err) });
-        emit({ stage: 'error', message: String((err && err.message) || err) });
-      }
-    }
-
-    // DOM 通道槽位：启动旗（供视频页确认脚本已运行）+ 任务槽 + 结果槽
-    const __slots = {};
-    for (const __id of ['asr-boot-flag', 'asr-job-slot', 'asr-result-slot']) {
-      const el = document.createElement('div');
-      el.id = __id;
-      el.style.display = 'none';
-      document.body.appendChild(el);
-      __slots[__id] = el;
-    }
-    window.addEventListener('message', e => {
-      const d = e.data;
-      if (!d || d.type !== 'asr-job') return;
-      const raw = JSON.stringify(d);
-      if (__lastJob === raw) return;
-      __lastJob = raw;
-      handleJob(d);
-    });
-    setInterval(() => {
-      const raw = __slots['asr-job-slot'].textContent;
-      if (raw && raw !== __lastJob) {
-        __lastJob = raw;
-        try { handleJob(JSON.parse(raw)); } catch (err) { /* 忽略坏数据 */ }
-      }
-    }, 300);
-    post({ stage: 'boot' });
-  `;
-
-  function buildWorkerScript() {
-    // 管道函数经 toString() 序列化注入工作页（单一源码，不维护两份）
-    const serialized = [concatU8, readU32, readU64, boxTypeAt, walkBoxes, collectBoxes, parseTimescale,
-      parseMoofTimeMs, parseSidx, byteFromSidx, bytesToBase64, gmRangeRequest, fetchAudioHeader,
-      probeTimeAt, findByteForTime, streamRangeChunks, mapWithBudget, transcribeAudioChunk, normalizeSubtitle]
-      .map(fn => fn.toString()).join('\n');
-    const card = '<div style="font:14px/1.8 system-ui,\'Microsoft YaHei\',sans-serif;color:#333;max-width:440px;margin:14vh auto;padding:26px 30px;background:#fff;border-radius:12px;box-shadow:0 6px 28px rgba(0,0,0,.08)">'
-      + '<div style="font-size:16px;font-weight:600;margin-bottom:6px">字幕识别 · 后台工作页</div>'
-      + '<div style="color:#999;font-size:12px;margin-bottom:14px">语音识别正在此标签页后台运行，请勿关闭；完成后会自动关闭。</div>'
-      + '<div id="asr-worker-status" style="padding:10px 12px;background:#f2f3f5;border-radius:8px;font-size:13px;min-height:20px">等待任务…</div>'
-      + '</div>';
-    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>字幕识别 · 后台工作页</title>'
-      + '<style>html,body{margin:0;background:#f6f7f8}</style></head><body>' + card + '<script>'
-      + '"use strict";\n'
-      + 'const PROBE_BYTES=' + PROBE_BYTES + ',MAX_AUDIO_CHUNK_BYTES=' + MAX_AUDIO_CHUNK_BYTES
-      + ',AUDIO_WINDOW_BYTES=' + AUDIO_WINDOW_BYTES + ',ASR_INFLIGHT_BUDGET=' + ASR_INFLIGHT_BUDGET
-      + ',ASR_REQUEST_TIMEOUT_MS=' + ASR_REQUEST_TIMEOUT_MS + ',ASR_MODEL=' + JSON.stringify(ASR_MODEL) + ';\n'
-      + "const CONTAINER_BOXES = new Set(['moov','trak','mdia','minf','stbl','moof','traf','mvex','edts']);\n"
-      + 'let gmRangeUsable = false; // about:blank 无 GM 特权，网络请求全部走页面 fetch\n'
-      + serialized + '\n'
-      + WORKER_DRIVER
-      + '</script></body></html>';
-  }
-
-  function collectCheckpoints(videoKey, selHash) {
-    const out = {};
-    if (typeof GM_listValues !== 'function') return out;
-    const prefix = CHECKPOINT_PREFIX + videoKey + '|' + selHash + '|';
-    for (const k of GM_listValues()) {
-      if (!k.startsWith(prefix)) continue;
-      const v = readCheckpoint(k);
-      if (v == null) continue;
-      const tail = k.slice(prefix.length);
-      const sep = tail.lastIndexOf('|');
-      if (sep > 0) out[tail.slice(0, sep) + ':' + tail.slice(sep + 1)] = v;
-    }
-    return out;
-  }
-
-  function runAsrWithWorker(video, track, selection, ui) {
-    return new Promise((resolve, reject) => {
-      let worker = null;
-      let settled = false;
-      let booted = false;
-      let jobSent = false;
-      let lastBeat = Date.now();
-      const timers = [];
-      let bootTimeout = null;
-      const videoKey = videoCacheKey(video);
-      const selHash = selectionHash(selection);
-      const clean = () => {
-        if (settled) return;
-        settled = true;
-        window.removeEventListener('message', onMessage);
-        for (const t of timers) clearInterval(t);
-        if (bootTimeout) clearTimeout(bootTimeout);
-        try { if (worker) worker.close(); } catch (_) { /* ignore */ }
-      };
-      const finishOk = payload => { clean(); resolve({ text: payload.text, chunkCount: payload.chunkCount }); };
-      const finishErr = message => { clean(); reject(new Error(message)); };
-      const readWorkerEl = id => {
-        try {
-          const doc = worker && worker.document;
-          return doc ? doc.getElementById(id) : null;
-        } catch (_) { return null; }
-      };
-      const deliverJob = () => {
-        if (jobSent || settled) return;
-        jobSent = true;
-        const payload = {
-          type: 'asr-job',
-          track,
-          selection,
-          videoKey,
-          selHash,
-          apiKey: getAsrApiKey(),
-          endpoint: getAsrEndpoint(),
-          language: getAsrLanguage(),
-          checkpoints: collectCheckpoints(videoKey, selHash),
-        };
-        // 双通道下发：postMessage + DOM 任务槽（同源直达，消息被拦时兜底）
-        try { worker.postMessage(payload, '*'); } catch (_) { /* 走 DOM 通道 */ }
-        const slot = readWorkerEl('asr-job-slot');
-        if (slot) {
-          try { slot.textContent = JSON.stringify(payload); } catch (_) { /* ignore */ }
-        }
-        ui.progress('任务已下发，等待识别进度…', null, '');
-      };
-      const settleFromDomResult = raw => {
-        let payload;
-        try { payload = JSON.parse(raw); } catch (_) { return; }
-        if (payload.stage === 'done') finishOk(payload);
-        else if (payload.stage === 'error') finishErr(payload.message || '后台识别失败');
-      };
-      const onMessage = event => {
-        const d = event.data;
-        if (!d || d.type !== 'asr-progress') return;
-        lastBeat = Date.now();
-        if (d.stage === 'boot') { deliverJob(); return; }
-        if (d.stage === 'progress') ui.progress(d.text || '识别中', typeof d.fraction === 'number' ? d.fraction : null, d.detail || '');
-        else if (d.stage === 'chunkDone') writeCheckpoint(checkpointKey(videoKey, selHash, d.ri, d.idx), d.text);
-        else if (d.stage === 'done') finishOk(d);
-        else if (d.stage === 'error') finishErr(d.message);
-      };
-      // 心跳：超过 12 秒没有消息就提示仍在工作
-      timers.push(setInterval(() => {
-        if (settled) return;
-        if (Date.now() - lastBeat > 12000) ui.progress('仍在识别中，请稍候…', null, '后台标签页可查看实时状态');
-      }, 6000));
-      ui.progress('正在启动后台识别标签页…', null, '');
-      try {
-        worker = window.open('about:blank', WORKER_TAB_NAME);
-      } catch (_) { worker = null; }
-      if (!worker) { clean(); reject(new Error('无法打开工作标签页')); return; }
-      window.addEventListener('message', onMessage);
-      // 轮询工作页 DOM：启动旗 -> 下发任务；结果槽 -> 收结果（不依赖 postMessage）
-      timers.push(setInterval(() => {
-        if (settled) return;
-        if (!booted) {
-          if (readWorkerEl('asr-boot-flag')) {
-            booted = true;
-            ui.progress('后台标签页已就绪', null, '');
-            deliverJob();
-          }
-          return;
-        }
-        const result = readWorkerEl('asr-result-slot');
-        if (result && result.textContent) settleFromDomResult(result.textContent);
-      }, 400));
-      // 标签页被手动关闭时及时回退，避免任务悬死
-      timers.push(setInterval(() => {
-        if (settled) return;
-        let closed = false;
-        try { closed = !worker || worker.closed; } catch (_) { closed = true; }
-        if (closed) finishErr('后台标签页被关闭');
-      }, 2000));
-      // 6 秒内未见启动旗/启动消息：视为注入失败，关标签页回退本页识别
-      bootTimeout = setTimeout(() => {
-        if (settled) return;
-        if (!booted) finishErr('后台标签页初始化失败');
-      }, 6000);
-      const injectWorker = () => {
-        worker.document.open();
-        worker.document.write(buildWorkerScript());
-        worker.document.close();
-      };
-      try {
-        injectWorker();
-      } catch (_) {
-        setTimeout(() => {
-          try { injectWorker(); } catch (e2) { finishErr('后台标签页注入失败'); }
-        }, 300);
-      }
-    });
-  }
-
   // ===== 无字幕视频的语音识别兜底 =====
 
   function getAsrApiKey() {
@@ -2454,8 +2209,10 @@
           const ck = checkpointKey(videoKey, fallbackHash, 0, idx);
           const cached = readCheckpoint(ck);
           if (cached != null) return cached;
+          await heapGuard(`兜底整片 第 ${idx + 1} 片`);
           const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
           writeCheckpoint(ck, text);
+          await sleep0();
           return text;
         }, ASR_INFLIGHT_BUDGET);
       clearCheckpointsFor(videoKey, fallbackHash);
@@ -2507,8 +2264,10 @@
         const ck = checkpointKey(videoKey, selHash, ri, idx);
         const cached = readCheckpoint(ck);
         if (cached != null) return cached;
+        await heapGuard(`第 ${idx + 1} 片`);
         const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
         writeCheckpoint(ck, text);
+        await sleep0(); // 分片间让出主线程，保持页面与播放器响应
         return text;
       }, ASR_INFLIGHT_BUDGET);
       chunkCount += texts.length;
@@ -3016,19 +2775,11 @@
         if (!text) {
           showProgressPanel();
           try {
-            let result;
-            const ui = { progress: (stage, fraction, detail) => updateProgress(stage, fraction, detail) };
-            try {
-              result = await runAsrWithWorker(video, track, selection, ui);
-            } catch (workerError) {
-              console.warn('[复制字幕] 工作标签页不可用，回退本页识别', workerError);
-              showToast(`工作标签页不可用（${workerError.message || workerError}），已回退本页识别`);
-              result = await transcribeVideoAudio(video, track, selection, {
-                onDownloadProgress: f => updateProgress('正在下载音频', f, ''),
-                onChunkDelta: () => updateProgress('正在识别', null, ''),
-                refreshTrack: () => fetchAudioTrack(video),
-              });
-            }
+            const result = await transcribeVideoAudio(video, track, selection, {
+              onDownloadProgress: f => updateProgress('正在下载音频', f, ''),
+              onChunkDelta: () => updateProgress('正在识别', null, ''),
+              refreshTrack: () => fetchAudioTrack(video),
+            });
             clearCheckpointsFor(videoKey, selHash);
             text = result.text;
             chunkCount = result.chunkCount;
