@@ -108,7 +108,7 @@
   const CHECKPOINT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
   const AUDIO_WINDOW_BYTES = 32 * 1024 * 1024;   // 流式下载滑动窗口
   const ASR_INFLIGHT_BUDGET = 24 * 1024 * 1024;  // 在途分片总字节上限（控制并发瞬态）
-  const PROBE_BYTES = 512 * 1024;                // 时间->字节 二分探测窗口
+  const PROBE_BYTES = 128 * 1024;                // 时间->字节 探测窗口（128KB 足够容纳多个音频分片）
   const LONG_VIDEO_WARN_S = 3600;                // 超过 1 小时给出提示
   const WORKER_TAB_NAME = 'bili-asr-worker';
   const WORKER_TAB_URL = 'https://www.bilibili.com/404';
@@ -746,46 +746,93 @@
   }
 
   // 带 Range 的请求；CDN 忽略 Range 返回 200 全量时直接拒绝（调用方走兜底）
+  let gmRangeUsable = true;
+
   async function gmRangeRequest(url, start, end) {
     const rangeValue = end == null ? `bytes=${start}-` : `bytes=${start}-${end}`;
     let host = url;
     try { host = new URL(url).host; } catch (_) { /* ignore */ }
-    // 优先油猴特权请求（无跨域限制）；失败回退页面 fetch（Range 是 CORS 安全头，不触发预检）
-    try {
-      return await new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url,
-          headers: { Range: rangeValue },
-          responseType: 'arraybuffer',
-          timeout: 120000,
-          onload: r => {
-            if (r.status !== 206 && r.status !== 200) { reject(new Error(`HTTP ${r.status}（${host}）`)); return; }
-            if (r.status === 200 && start > 0) { reject(new Error('CDN 不支持 Range')); return; }
-            const bytes = new Uint8Array(r.response || []);
-            if (start > 0 && bytes.length > PROBE_BYTES * 8) { reject(new Error('CDN 忽略 Range 返回全量')); return; }
-            let total = null;
-            const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.responseHeaders || '');
-            if (m) total = Number(m[1]);
-            resolve({ bytes, total });
-          },
-          onerror: () => reject(new Error(`油猴请求失败（${host}）`)),
-          ontimeout: () => reject(new Error(`请求超时（${host}）`)),
+    const span = (end == null ? 0 : end - start) + 1;
+    const timeoutMs = span <= 256 * 1024 ? 20000 : span <= 2 * 1024 * 1024 ? 45000 : 180000;
+    // 优先油猴特权请求（无跨域限制）；传输层失败一次即熔断，后续全部直接走页面 fetch
+    if (gmRangeUsable) {
+      try {
+        return await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'GET',
+            url,
+            headers: { Range: rangeValue },
+            responseType: 'arraybuffer',
+            timeout: timeoutMs,
+            onload: r => {
+              if (r.status !== 206 && r.status !== 200) { reject(new Error(`HTTP ${r.status}（${host}）`)); return; }
+              if (r.status === 200 && start > 0) { reject(new Error('CDN 不支持 Range')); return; }
+              const bytes = new Uint8Array(r.response || []);
+              let total = null;
+              const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.responseHeaders || '');
+              if (m) total = Number(m[1]);
+              resolve({ bytes, total });
+            },
+            onerror: () => { gmRangeUsable = false; reject(new Error(`油猴请求失败（${host}）`)); },
+            ontimeout: () => { gmRangeUsable = false; reject(new Error(`请求超时（${host}）`)); },
+          });
         });
-      });
-    } catch (gmError) {
-      console.warn('[复制字幕] 油猴 Range 请求失败，回退页面 fetch', gmError.message);
-      const resp = await fetch(url, { headers: { Range: rangeValue }, cache: 'no-store' });
-      if (!resp.ok && resp.status !== 206) throw new Error(`HTTP ${resp.status}（${host}）`);
-      if (resp.status === 200 && start > 0) throw new Error('CDN 不支持 Range');
-      const bytes = new Uint8Array(await resp.arrayBuffer());
-      if (start > 0 && bytes.length > PROBE_BYTES * 8) throw new Error('CDN 忽略 Range 返回全量');
-      const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(resp.headers.get('Content-Range') || '');
-      return { bytes, total: m ? Number(m[1]) : null };
+      } catch (gmError) {
+        console.warn('[复制字幕] 油猴 Range 请求失败，本次起改走页面 fetch', gmError.message);
+      }
     }
+    const resp = await fetch(url, { headers: { Range: rangeValue }, cache: 'no-store' });
+    if (!resp.ok && resp.status !== 206) throw new Error(`HTTP ${resp.status}（${host}）`);
+    if (resp.status === 200 && start > 0) throw new Error('CDN 不支持 Range');
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(resp.headers.get('Content-Range') || '');
+    return { bytes, total: m ? Number(m[1]) : null };
   }
 
   // 取音频头部（ftyp+moov+sidx）与 timescale
+  // sidx（分段索引）：给出每个媒体分片的字节位置与时长，可把章节定位从上百次探测降到 1 次校验
+  function parseSidx(bytes, sidxStart) {
+    try {
+      const size = readU32(bytes, sidxStart);
+      const version = bytes[sidxStart + 8];
+      let off = sidxStart + 12 + 4; // version/flags + reference_ID
+      const timescale = readU32(bytes, off); off += 4;
+      let firstOffset = 0;
+      if (version === 0) { off += 4; firstOffset = readU32(bytes, off); off += 4; }
+      else { off += 8; firstOffset = Number(readU64(bytes, off)); off += 8; }
+      off += 2; // reserved
+      const refCount = readU32(bytes, off) & 0xFFFF; off += 2;
+      if (!refCount || refCount > 100000) return null;
+      const base = sidxStart + size + firstOffset; // 常见布局：首个分片紧跟 sidx 之后
+      const refs = [];
+      let cursor = base;
+      let totalMs = 0;
+      for (let i = 0; i < refCount && off + 12 <= sidxStart + size; i++) {
+        const word = readU32(bytes, off);
+        const refSize = word & 0x7FFFFFFF;
+        const durationRaw = readU32(bytes, off + 4);
+        off += 12;
+        if (refSize <= 0) return null;
+        const durationMs = (durationRaw / timescale) * 1000;
+        refs.push({ start: cursor, size: refSize, durationMs });
+        cursor += refSize;
+        totalMs += durationMs;
+      }
+      if (!refs.length) return null;
+      return { timescale, refs, avgDurationMs: totalMs / refs.length };
+    } catch (_) { return null; }
+  }
+
+  function byteFromSidx(sidx, tMs) {
+    let t = 0;
+    for (const ref of sidx.refs) {
+      if (t + ref.durationMs > tMs) return { start: ref.start, durationMs: ref.durationMs };
+      t += ref.durationMs;
+    }
+    const last = sidx.refs[sidx.refs.length - 1];
+    return { start: last.start, durationMs: last.durationMs };
+  }
+
   async function fetchAudioHeader(url) {
     let size = 1024 * 1024;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -793,10 +840,12 @@
       const boxes = walkBoxes(bytes, 0, bytes.length);
       const firstMoof = boxes.find(b => b.type === 'moof');
       if (firstMoof) {
+        const sidxBox = boxes.find(b => b.type === 'sidx' && b.start < firstMoof.start);
         return {
           header: bytes.slice(0, firstMoof.start),
           headerEnd: firstMoof.start,
           timescale: parseTimescale(bytes, 0, firstMoof.start),
+          sidx: sidxBox ? parseSidx(bytes, sidxBox.start) : null,
           total,
         };
       }
@@ -818,10 +867,21 @@
     return null;
   }
 
-  // 时间 -> 字节：二分探测（time 随 offset 单调），收敛后微调到第一个 time >= tMs 的 moof
+  // 时间 -> 字节：优先 sidx 索引快路径（1 次探测校验），不可信再二分
   async function findByteForTime(url, totalSize, tMs, headerInfo) {
+    if (headerInfo.sidx && headerInfo.sidx.refs.length) {
+      const candidate = byteFromSidx(headerInfo.sidx, tMs);
+      if (candidate.start > 0 && candidate.start < totalSize) {
+        try {
+          const p = await probeTimeAt(url, candidate.start, headerInfo);
+          if (p && p.timeMs >= tMs - candidate.durationMs && p.timeMs < tMs + candidate.durationMs * 2) {
+            return p.bytePos;
+          }
+        } catch (_) { /* 索引不可信，走二分 */ }
+      }
+    }
     let lo = 0, hi = totalSize;
-    for (let i = 0; i < 16 && hi - lo > 64 * 1024; i++) {
+    for (let i = 0; i < 12 && hi - lo > PROBE_BYTES; i++) {
       const mid = Math.floor((lo + hi) / 2);
       const p = await probeTimeAt(url, mid, headerInfo);
       if (!p) { hi = mid; continue; }
@@ -1117,7 +1177,25 @@
   }
 
   // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
+  function decorateWorkerPage() {
+    try {
+      document.title = '字幕识别 · 后台工作页';
+      document.documentElement.style.background = '#f6f7f8';
+      document.body.innerHTML = '<div style="font:14px/1.8 system-ui,\'Microsoft YaHei\',sans-serif;color:#333;max-width:440px;margin:14vh auto;padding:26px 30px;background:#fff;border-radius:12px;box-shadow:0 6px 28px rgba(0,0,0,.08)">'
+        + '<div style="font-size:16px;font-weight:600;margin-bottom:6px">字幕识别 · 后台工作页</div>'
+        + '<div style="color:#999;font-size:12px;margin-bottom:14px">语音识别正在此标签页后台运行，请勿关闭；完成后会自动关闭。</div>'
+        + '<div id="asr-worker-status" style="padding:10px 12px;background:#f2f3f5;border-radius:8px;font-size:13px;min-height:20px">等待任务…</div>'
+        + '</div>';
+    } catch (_) { /* ignore */ }
+  }
+
+  function setWorkerStatus(text) {
+    const el = document.getElementById('asr-worker-status');
+    if (el) el.textContent = String(text || '');
+  }
+
   function attachAsrWorker() {
+    decorateWorkerPage();
     const announce = () => { try { window.opener && window.opener.postMessage({ type: 'asr-worker-ready' }, '*'); } catch (_) { /* ignore */ } };
     announce();
     window.addEventListener('message', async event => {
@@ -1130,17 +1208,27 @@
       if (data.type !== 'asr-job') return;
       const reply = event.source;
       const post = msg => { try { reply.postMessage(Object.assign({ type: 'asr-progress', jobId: data.jobId }, msg), '*'); } catch (_) { /* ignore */ } };
+      setWorkerStatus('已接收任务，开始读取音频结构');
+      post({ stage: 'progress', text: '后台标签页已就绪，正在读取音频结构', fraction: null, detail: '' });
       const video = { site: 'bilibili', cid: data.cid, bvid: data.bvid, aid: data.aid, videoKey: data.videoKey };
       try {
-        post({ stage: 'start' });
         const result = await transcribeVideoAudio(video, data.track, data.selection, {
-          onDownloadProgress: f => post({ stage: 'download', fraction: f }),
-          onChunkDelta: () => post({ stage: 'chunk' }),
+          onStage: (text, fraction, detail) => {
+            setWorkerStatus(text);
+            post({ stage: 'progress', text, fraction, detail });
+          },
+          onDownloadProgress: f => {
+            setWorkerStatus(`正在下载音频 ${Math.round(f * 100)}%`);
+            post({ stage: 'progress', text: '正在下载音频', fraction: f, detail: '' });
+          },
+          onChunkDelta: () => post({ stage: 'progress', text: '正在识别', fraction: null, detail: '' }),
           refreshTrack: () => fetchBilibiliAudioTrack(video),
         });
+        setWorkerStatus('识别完成，正在回传结果…');
         post({ stage: 'done', text: result.text, chunkCount: result.chunkCount });
       } catch (error) {
-        post({ stage: 'error', message: String(error && error.message || error) });
+        setWorkerStatus(`识别失败：${(error && error.message) || error}`);
+        post({ stage: 'error', message: String((error && error.message) || error) });
       }
     });
   }
@@ -1149,18 +1237,21 @@
     return new Promise((resolve, reject) => {
       let worker = null;
       let settled = false;
+      let lastBeat = Date.now();
+      let beatTimer = null;
       const clean = () => {
         settled = true;
         window.removeEventListener('message', onMessage);
         window.removeEventListener('message', onReady);
         clearTimeout(readyTimer);
+        if (beatTimer) clearInterval(beatTimer);
         try { worker && worker.close(); } catch (_) { /* ignore */ }
       };
       const onMessage = event => {
         const d = event.data;
         if (!d || d.type !== 'asr-progress') return;
-        if (d.stage === 'download') ui.progress('正在下载音频', typeof d.fraction === 'number' ? d.fraction : null, '');
-        else if (d.stage === 'chunk') ui.progress('正在识别', null, '');
+        lastBeat = Date.now();
+        if (d.stage === 'progress') ui.progress(d.text || '识别中', typeof d.fraction === 'number' ? d.fraction : null, d.detail || '');
         else if (d.stage === 'done') { clean(); resolve({ text: d.text, chunkCount: d.chunkCount }); }
         else if (d.stage === 'error') { clean(); reject(new Error(d.message)); }
       };
@@ -1184,6 +1275,13 @@
       const readyTimer = setTimeout(() => {
         if (!settled) { clean(); reject(new Error('工作标签页未就绪')); }
       }, 10000);
+      // 心跳：超过 12 秒没有消息就提示仍在工作，避免“准备中”假死观感
+      beatTimer = setInterval(() => {
+        if (settled) return;
+        if (Date.now() - lastBeat > 12000) {
+          ui.progress('仍在识别中，请稍候…', null, '后台标签页可查看实时状态');
+        }
+      }, 6000);
 
       try {
         worker = window.open(WORKER_TAB_URL, WORKER_TAB_NAME);
@@ -1195,7 +1293,7 @@
     });
   }
 
-  // ===== 无字幕视频的语音识别兜底 =====
+  // ===== Fork：工作标签页  // ===== 无字幕视频的语音识别兜底 =====
 
   function getAsrApiKey() {
     return String(GM_getValue(ASR_API_KEY_SETTING, DEFAULT_ASR_API_KEY) || '').trim();
@@ -2160,7 +2258,11 @@
     const videoKey = video.videoKey || videoCacheKey(video);
     const selHash = selectionHash(selection);
 
-    updateProgress('正在读取音频结构', null, '');
+    const stage = (text, fraction, detail) => {
+      if (hooks.onStage) { try { hooks.onStage(text, fraction, detail); } catch (_) { /* ignore */ } }
+      updateProgress(text, fraction == null ? null : fraction, detail == null ? '' : detail);
+    };
+    stage('正在读取音频结构', null, '');
     let headerInfo = null;
     try {
       headerInfo = await fetchAudioHeader(track.url);
@@ -2174,9 +2276,9 @@
     if (!headerInfo || !totalSize) {
       const degraded = !!(selection && selection.mode === 'chapters');
       if (degraded) showToast('分段下载不可用，已回退整片识别（本次忽略章节选择）');
-      updateProgress('正在下载音频', null, '');
+      stage('正在下载音频', null, '');
       const bytes = await downloadAudioBytes(track, (loaded, total) => {
-        updateProgress('正在下载音频', total ? loaded / total : null,
+        stage('正在下载音频', total ? loaded / total : null,
           `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
       }, () => fetchAudioTrack(video));
       const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
@@ -2204,7 +2306,9 @@
       ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY, start: 0, end: totalSize }];
     } else {
       const picked = [];
-      for (const r of selection.ranges) {
+      for (let bi = 0; bi < selection.ranges.length; bi++) {
+        const r = selection.ranges[bi];
+        stage(`正在定位章节边界 ${bi + 1}/${selection.ranges.length}：${r.title || ''}`, bi / selection.ranges.length, '');
         const start = await findByteForTime(track.url, totalSize, r.startMs, headerInfo);
         const end = r.endMs >= totalMs ? totalSize : await findByteForTime(track.url, totalSize, r.endMs, headerInfo);
         picked.push({ title: r.title, startMs: r.startMs, endMs: r.endMs, start, end: Math.max(end, start + 4096) });
@@ -2222,6 +2326,7 @@
       }
     }
 
+    stage('正在下载音频', null, '');
     const results = [];
     let chunkCount = 0;
     for (let ri = 0; ri < ranges.length; ri++) {
