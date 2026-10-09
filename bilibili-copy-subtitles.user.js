@@ -108,7 +108,6 @@
   const CHECKPOINT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
   const AUDIO_WINDOW_BYTES = 8 * 1024 * 1024;    // 流式下载滑动窗口（本页执行取小值控制峰值内存）
   const ASR_INFLIGHT_BUDGET = 24 * 1024 * 1024;  // 在途分片总字节上限（控制并发瞬态）
-  const PROBE_BYTES = 128 * 1024;                // 时间->字节 探测窗口（128KB 足够容纳多个音频分片）
   const LONG_VIDEO_WARN_S = 3600;                // 超过 1 小时给出提示
 
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
@@ -787,49 +786,6 @@
   }
 
   // 取音频头部（ftyp+moov+sidx）与 timescale
-  // sidx（分段索引）：给出每个媒体分片的字节位置与时长，可把章节定位从上百次探测降到 1 次校验
-  function parseSidx(bytes, sidxStart) {
-    try {
-      const size = readU32(bytes, sidxStart);
-      const version = bytes[sidxStart + 8];
-      let off = sidxStart + 12 + 4; // version/flags + reference_ID
-      const timescale = readU32(bytes, off); off += 4;
-      let firstOffset = 0;
-      if (version === 0) { off += 4; firstOffset = readU32(bytes, off); off += 4; }
-      else { off += 8; firstOffset = Number(readU64(bytes, off)); off += 8; }
-      off += 2; // reserved
-      const refCount = readU32(bytes, off) & 0xFFFF; off += 2;
-      if (!refCount || refCount > 100000) return null;
-      const base = sidxStart + size + firstOffset; // 常见布局：首个分片紧跟 sidx 之后
-      const refs = [];
-      let cursor = base;
-      let totalMs = 0;
-      for (let i = 0; i < refCount && off + 12 <= sidxStart + size; i++) {
-        const word = readU32(bytes, off);
-        const refSize = word & 0x7FFFFFFF;
-        const durationRaw = readU32(bytes, off + 4);
-        off += 12;
-        if (refSize <= 0) return null;
-        const durationMs = (durationRaw / timescale) * 1000;
-        refs.push({ start: cursor, size: refSize, durationMs });
-        cursor += refSize;
-        totalMs += durationMs;
-      }
-      if (!refs.length) return null;
-      return { timescale, refs, avgDurationMs: totalMs / refs.length };
-    } catch (_) { return null; }
-  }
-
-  function byteFromSidx(sidx, tMs) {
-    let t = 0;
-    for (const ref of sidx.refs) {
-      if (t + ref.durationMs > tMs) return { start: ref.start, durationMs: ref.durationMs };
-      t += ref.durationMs;
-    }
-    const last = sidx.refs[sidx.refs.length - 1];
-    return { start: last.start, durationMs: last.durationMs };
-  }
-
   async function fetchAudioHeader(url) {
     let size = 1024 * 1024;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -837,12 +793,10 @@
       const boxes = walkBoxes(bytes, 0, bytes.length);
       const firstMoof = boxes.find(b => b.type === 'moof');
       if (firstMoof) {
-        const sidxBox = boxes.find(b => b.type === 'sidx' && b.start < firstMoof.start);
         return {
           header: bytes.slice(0, firstMoof.start),
           headerEnd: firstMoof.start,
           timescale: parseTimescale(bytes, 0, firstMoof.start),
-          sidx: sidxBox ? parseSidx(bytes, sidxBox.start) : null,
           total,
         };
       }
@@ -851,73 +805,16 @@
     throw new Error('音频头部解析失败（未找到 moof，可能不是 fMP4/DASH 音轨）');
   }
 
-  async function probeTimeAt(url, pos, headerInfo) {
-    const { bytes } = await gmRangeRequest(url, pos, pos + PROBE_BYTES - 1);
-    // 窗口起点可能落在 box 中间导致走包失步，先按 moof 四字节特征扫描再校验
-    for (let i = 0; i + 8 <= bytes.length; i++) {
-      if (bytes[i + 4] !== 0x6d || bytes[i + 5] !== 0x6f || bytes[i + 6] !== 0x6f || bytes[i + 7] !== 0x66) continue;
-      const size = readU32(bytes, i);
-      if (size < 8 || i + size > bytes.length) continue;
-      const t = parseMoofTimeMs(bytes, i, headerInfo.timescale);
-      if (t != null) return { timeMs: t, bytePos: pos + i };
-    }
-    return null;
-  }
-
-  // 时间 -> 字节：优先 sidx 索引快路径（1 次探测校验），不可信再二分
-  async function findByteForTime(url, totalSize, tMs, headerInfo) {
-    if (headerInfo.sidx && headerInfo.sidx.refs.length) {
-      const candidate = byteFromSidx(headerInfo.sidx, tMs);
-      if (candidate.start > 0 && candidate.start < totalSize) {
-        try {
-          const p = await probeTimeAt(url, candidate.start, headerInfo);
-          if (p && p.timeMs >= tMs - candidate.durationMs && p.timeMs < tMs + candidate.durationMs * 2) {
-            return p.bytePos;
-          }
-        } catch (_) { /* 索引不可信，走二分 */ }
-      }
-    }
-    let lo = 0, hi = totalSize;
-    for (let i = 0; i < 12 && hi - lo > PROBE_BYTES; i++) {
-      const mid = Math.floor((lo + hi) / 2);
-      const p = await probeTimeAt(url, mid, headerInfo);
-      if (!p) { hi = mid; continue; }
-      if (p.timeMs < tMs) lo = mid; else hi = mid;
-    }
-    const { bytes } = await gmRangeRequest(url, lo, lo + PROBE_BYTES - 1);
-    for (const b of walkBoxes(bytes, 0, bytes.length)) {
-      if (b.type !== 'moof') continue;
-      const t = parseMoofTimeMs(bytes, b.start, headerInfo.timescale);
-      if (t != null && t >= tMs) return lo + b.start;
-    }
-    return lo;
-  }
-
-  // 流式分段：只保留滑动窗口，按 moof+mdat 边界凑片，每片拼头部保证可独立解码
-  async function* streamRangeChunks(url, headerInfo, range, maxChunkBytes, onProgress, refreshTrack) {
+  // 顺序流式走完整条音轨：逐分片（moof+mdat）产出其起始时间与数据，不做任何字节定位探测
+  async function* streamWholeFile(url, headerInfo, totalSize, onProgress, stopAfterMs, refreshTrack) {
     let curUrl = url;
-    let pos = range.start;
+    let pos = 0;
     let buf = new Uint8Array(0);
-    let pending = [];
-    let pendingSize = 0;
-    let seenMoof = false;
     let eof = false;
-    const flush = () => {
-      if (!pending.length) return null;
-      let total = headerInfo.header.length;
-      for (const f of pending) total += f.length;
-      const chunk = new Uint8Array(total);
-      chunk.set(headerInfo.header, 0);
-      let c = headerInfo.header.length;
-      for (const f of pending) { chunk.set(f, c); c += f.length; }
-      pending = [];
-      pendingSize = 0;
-      return chunk;
-    };
-    while (!eof || buf.length) {
-      while (!eof && buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < range.end) {
+    while (!eof) {
+      while (buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < totalSize) {
         const start = pos + buf.length;
-        const want = Math.min(AUDIO_WINDOW_BYTES - buf.length, range.end - start);
+        const want = Math.min(AUDIO_WINDOW_BYTES - buf.length, totalSize - start);
         try {
           const r = await gmRangeRequest(curUrl, start, start + want - 1);
           if (!r.bytes.length) { eof = true; break; }
@@ -933,49 +830,51 @@
         }
       }
       let off = 0;
+      let fragStart = -1;
+      let fragTime = null;
+      let consumed = 0;
       while (off + 8 <= buf.length) {
         const size = readU32(buf, off);
         if (size < 8 || off + size > buf.length) break;
         const type = boxTypeAt(buf, off);
         if (type === 'moof') {
-          const t = parseMoofTimeMs(buf, off, headerInfo.timescale);
-          if (t != null && t >= range.endMs) { // 到达章节末尾，收尾
-            eof = true;
-            break;
+          if (fragStart >= 0) {
+            yield { timeMs: fragTime, data: buf.slice(fragStart, off) };
+            if (stopAfterMs != null && fragTime != null && fragTime > stopAfterMs) return;
           }
-          seenMoof = true;
-          if (pendingSize + size > maxChunkBytes && pending.length) {
-            const chunk = flush();
-            if (chunk) yield chunk;
-          }
-        }
-        if (seenMoof) {
-          pending.push(buf.slice(off, off + size));
-          pendingSize += size;
+          fragStart = off;
+          fragTime = parseMoofTimeMs(buf, off, headerInfo.timescale);
         }
         off += size;
+        consumed = off;
       }
-      pos += off;
-      if (off) buf = buf.slice(off);
-      if (onProgress && range.end > range.start) {
-        try { onProgress(Math.min(1, (pos - range.start) / Math.max(1, range.end - range.start))); } catch (_) { /* ignore */ }
+      pos += consumed;
+      if (consumed) buf = buf.slice(consumed);
+      if (onProgress) {
+        try { onProgress(Math.min(1, pos / Math.max(1, totalSize))); } catch (_) { /* ignore */ }
       }
-      if (eof && !buf.length) {
-        const chunk = flush();
-        if (chunk) yield chunk;
-      }
-      // 防死循环：既无法再取数（区间到头/已达窗口上限）又无法消费（剩余半包）时收尾退出
-      const canFill = !eof && buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < range.end;
-      if (!off && !canFill) {
+      const canFill = buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < totalSize;
+      if (!consumed && !canFill) {
         eof = true;
-        const chunk = flush();
-        if (chunk) yield chunk;
-        break;
+        if (fragStart >= 0 && fragStart < buf.length) {
+          yield { timeMs: fragTime, data: buf.slice(fragStart) };
+        }
       }
     }
   }
 
-  // 断点：按片落 GM 存储，重跑跳过已完成片
+  // 把若干分片与文件头拼成一个可独立解码的完整分片文件
+  function concatChunk(header, parts) {
+    let total = header.length;
+    for (const p of parts) total += p.length;
+    const chunk = new Uint8Array(total);
+    chunk.set(header, 0);
+    let c = header.length;
+    for (const p of parts) { chunk.set(p, c); c += p.length; }
+    return chunk;
+  }
+
+  // 断点：按片落 GM 存储  // 断点：按片落 GM 存储，重跑跳过已完成片
   function checkpointKey(videoKey, selHash, rangeIdx, chunkIdx) {
     return `${CHECKPOINT_PREFIX}${videoKey}|${selHash}|${rangeIdx}|${chunkIdx}`;
   }
@@ -2223,63 +2122,98 @@
       };
     }
 
-    // 组装字节区间：全篇或按章节（时间 -> 字节二分定位，重叠区间合并）
+    // 统一区间：全篇=单个区间；章节=勾选章节按时间排序。下载与分桶一条代码路径
     let ranges;
     if (!selection || selection.mode === 'full') {
-      ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY, start: 0, end: totalSize }];
+      ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY }];
     } else {
-      const picked = [];
-      for (let bi = 0; bi < selection.ranges.length; bi++) {
-        const r = selection.ranges[bi];
-        stage(`正在定位章节边界 ${bi + 1}/${selection.ranges.length}：${r.title || ''}`, bi / selection.ranges.length, '');
-        const start = await findByteForTime(track.url, totalSize, r.startMs, headerInfo);
-        const end = r.endMs >= totalMs ? totalSize : await findByteForTime(track.url, totalSize, r.endMs, headerInfo);
-        picked.push({ title: r.title, startMs: r.startMs, endMs: r.endMs, start, end: Math.max(end, start + 4096) });
+      ranges = selection.ranges
+        .map(r => ({ title: r.title, startMs: r.startMs, endMs: r.endMs }))
+        .sort((a, b) => a.startMs - b.startMs);
+    }
+    const rangeAt = tMs => {
+      for (let i2 = 0; i2 < ranges.length; i2++) {
+        if (tMs < ranges[i2].endMs) return tMs >= ranges[i2].startMs ? i2 : -1;
       }
-      picked.sort((a, b) => a.start - b.start);
-      ranges = [];
-      for (const r of picked) {
-        const last = ranges[ranges.length - 1];
-        if (last && r.start - last.end < 1024 * 1024) {
-          last.end = Math.max(last.end, r.end);
-          last.title = last.title ? `${last.title} + ${r.title}` : r.title;
-        } else {
-          ranges.push(Object.assign({}, r));
+      return -1;
+    };
+    // 顺序全量下载（最后一个区间结束后提前停止），按分片时间归桶，凑满即入识别队列
+    const lastEndMs = ranges[ranges.length - 1].endMs;
+    const stopAfterMs = lastEndMs === Number.POSITIVE_INFINITY ? null : lastEndMs;
+    stage('正在下载音频', 0, ranges.length > 1 ? `共 ${ranges.length} 个选中区间` : '');
+
+    const results = ranges.map(r => ({ title: r.title, parts: [] }));
+    const buffers = ranges.map(() => ({ size: 0, parts: [] }));
+    const counters = ranges.map(() => 0);
+    const pending = [];
+    let streamDone = false;
+    let runError = null;
+    let totalChunks = 0;
+    const transcribeOne = async (ri, idx, chunk) => {
+      const ck = checkpointKey(videoKey, selHash, ri, idx);
+      const cached = readCheckpoint(ck);
+      if (cached != null) { results[ri].parts[idx] = cached; return; }
+      await heapGuard(`区间 ${ri + 1} 第 ${idx + 1} 片`);
+      stage('正在识别', null, ranges.length > 1 ? `区间 ${ri + 1}/${ranges.length} 第 ${idx + 1} 片` : `第 ${idx + 1} 片`);
+      const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
+      writeCheckpoint(ck, text);
+      results[ri].parts[idx] = text;
+      await sleep0(); // 分片间让出主线程，保持页面与播放器响应
+    };
+    const worker = async () => {
+      while (!runError) {
+        const item = pending.shift();
+        if (!item) {
+          if (streamDone) return;
+          await new Promise(r => setTimeout(r, 60));
+          continue;
         }
+        try { await transcribeOne(item.ri, item.idx, item.chunk); }
+        catch (e) { runError = e; }
       }
+    };
+    const workers = Promise.all([worker(), worker()]);
+    const pushChunk = ri => {
+      const b = buffers[ri];
+      if (!b.parts.length) return;
+      const chunk = concatChunk(headerInfo.header, b.parts);
+      b.parts = [];
+      b.size = 0;
+      pending.push({ ri, idx: counters[ri]++, chunk });
+      totalChunks++;
+    };
+    try {
+      for await (const frag of streamWholeFile(track.url, headerInfo, totalSize,
+        f => stage('正在下载音频', f, ranges.length > 1 ? `已归入选中章节，共 ${ranges.length} 区间` : ''),
+        stopAfterMs, hooks.refreshTrack)) {
+        const ri = frag.timeMs == null ? -1 : rangeAt(frag.timeMs);
+        if (ri < 0) continue; // 未选中的时间区间：顺序读过但不缓存不识别
+        const b = buffers[ri];
+        b.parts.push(frag.data);
+        b.size += frag.data.length;
+        if (b.size >= MAX_AUDIO_CHUNK_BYTES) pushChunk(ri);
+        while (pending.length >= 3 && !runError) await new Promise(r => setTimeout(r, 80)); // 识别背压
+        if (runError) break;
+      }
+      for (let ri = 0; ri < ranges.length; ri++) pushChunk(ri);
+    } finally {
+      streamDone = true;
     }
-
-    stage('正在下载音频', null, '');
-    const totalRangeBytes = ranges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0) || 1;
-    let doneRangeBytes = 0;
-    const results = [];
-    let chunkCount = 0;
+    await workers;
+    if (runError) throw runError;
+    if (!totalChunks) {
+      throw new Error('未取得任何可识别的音频分片（音轨解析异常），已中止且不写入缓存');
+    }
     for (let ri = 0; ri < ranges.length; ri++) {
-      const range = ranges[ri];
-      const rangeBytes = Math.max(1, range.end - range.start);
-      const stream = streamRangeChunks(track.url, headerInfo, range, MAX_AUDIO_CHUNK_BYTES,
-        f => { if (hooks.onDownloadProgress) hooks.onDownloadProgress(Math.min(1, (doneRangeBytes + f * rangeBytes) / totalRangeBytes)); },
-        hooks.refreshTrack);
-      const texts = await mapWithBudget(stream, async (chunk, idx) => {
-        const ck = checkpointKey(videoKey, selHash, ri, idx);
-        const cached = readCheckpoint(ck);
-        if (cached != null) return cached;
-        await heapGuard(`第 ${idx + 1} 片`);
-        const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
-        writeCheckpoint(ck, text);
-        await sleep0(); // 分片间让出主线程，保持页面与播放器响应
-        return text;
-      }, ASR_INFLIGHT_BUDGET);
-      chunkCount += texts.length;
-      doneRangeBytes += rangeBytes;
-      results.push({ title: range.title, text: texts.filter(t => typeof t === 'string').join('') });
-      if (hooks.onRangeDone) hooks.onRangeDone(ri + 1, ranges.length);
+      results[ri].text = results[ri].parts.filter(t => typeof t === 'string').join('');
     }
-
     const assembled = results.length === 1 && !results[0].title
       ? results[0].text
       : results.map(r => (r.title ? `【${r.title}】\n${r.text}` : r.text)).join('\n');
-    return { text: normalizeSubtitle([{ content: assembled }]), chunkCount };
+    if (selection && selection.mode === 'chapters' && !results.some(r => r.text)) {
+      throw new Error('识别结果为空（所有区间均无正文），已中止且不写入缓存');
+    }
+    return { text: normalizeSubtitle([{ content: assembled }]), chunkCount: totalChunks };
   }
 
   // ===== 视频号（微信 Channels）转文字 =====
@@ -2766,7 +2700,7 @@
         )) return;
         asrConsentGiven = true;
 
-        const asrCacheKey = `${videoKey}:asr-v2:${selHash}`;
+        const asrCacheKey = `${videoKey}:asr-v3:${selHash}`;
         let text = readCache(BODY_CACHE_PREFIX, asrCacheKey);
         const fromCache = !!text;
         const startedAt = Date.now();
