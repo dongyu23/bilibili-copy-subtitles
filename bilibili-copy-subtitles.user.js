@@ -982,22 +982,45 @@
 
   function showChapterPanel(chapters, track) {
     return new Promise(resolve => {
+      console.log('[复制字幕] 章节数据', chapters);
       const totalMs = (track && track.duration ? track.duration : 0) * 1000;
+      // shadow DOM 承载，页面自身 CSS 无法穿透，杜绝样式干扰
+      const host = document.createElement('div');
+      host.id = 'bili-sub-chapter-host';
+      host.style.cssText = 'position:fixed;inset:0;z-index:2147483646';
+      const root = host.attachShadow({ mode: 'open' });
+      const style = document.createElement('style');
+      style.textContent = `
+        .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:#222}
+        .panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min(430px,92vw);max-height:80vh;display:flex;flex-direction:column}
+        .title{font-size:16px;font-weight:600;padding:14px 16px 4px;color:#222}
+        .hint{font-size:12px;color:#888;padding:0 16px 8px}
+        .list{overflow-y:auto;padding:4px 16px;flex:1}
+        .row{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer;color:#222;font-size:14px}
+        .row:hover{background:#f2f3f5}
+        .row input{width:15px;height:15px;cursor:pointer;flex:none;margin:0}
+        .row.dim{opacity:.45}
+        .full{font-weight:600;border-bottom:1px solid #eee;margin-bottom:4px}
+        .actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #eee}
+        .actions button{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;color:#222}
+        .actions button.ok{background:#00aeec;border-color:#00aeec;color:#fff}
+      `;
+      root.appendChild(style);
       const overlay = document.createElement('div');
-      overlay.id = 'bili-sub-chapter-overlay';
+      overlay.className = 'overlay';
       const panel = document.createElement('div');
-      panel.id = 'bili-sub-chapter-panel';
+      panel.className = 'panel';
       const title = document.createElement('div');
-      title.className = 'ch-title';
+      title.className = 'title';
       title.textContent = '选择识别范围';
       const hint = document.createElement('div');
-      hint.className = 'ch-hint';
+      hint.className = 'hint';
       hint.textContent = '默认全篇；取消“全篇”后可自由勾选章节，仅识别所选内容。';
       const list = document.createElement('div');
-      list.className = 'ch-list';
+      list.className = 'list';
 
       const fullRow = document.createElement('label');
-      fullRow.className = 'ch-row ch-full';
+      fullRow.className = 'row full';
       const fullCb = document.createElement('input');
       fullCb.type = 'checkbox';
       fullCb.checked = true;
@@ -1008,47 +1031,59 @@
       list.appendChild(fullRow);
 
       const boxes = [];
-      for (const ch of chapters) {
+      chapters.forEach((ch, i) => {
         const row = document.createElement('label');
-        row.className = 'ch-row';
+        row.className = 'row dim';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.checked = false;
-        cb.disabled = true;
         const span = document.createElement('span');
-        span.textContent = `${ch.title}（${fmtClock(ch.startMs)} - ${fmtClock(ch.endMs)}）`;
+        // 渲染期兜底：标题为空也显示“章节 N”，绝不留空行
+        span.textContent = `${ch.title || `章节 ${i + 1}`}（${fmtClock(ch.startMs)} - ${fmtClock(ch.endMs)}）`;
+        span.title = JSON.stringify(ch);
         row.appendChild(cb);
         row.appendChild(span);
         list.appendChild(row);
-        boxes.push(cb);
-      }
-      fullCb.addEventListener('change', () => {
-        const on = fullCb.checked;
-        for (const b of boxes) { b.checked = false; b.disabled = on; }
+        boxes.push({ cb, row });
       });
 
+      const syncMode = () => {
+        const full = fullCb.checked;
+        for (const b of boxes) b.row.classList.toggle('dim', full);
+      };
+      fullCb.addEventListener('change', () => {
+        if (fullCb.checked) for (const b of boxes) b.cb.checked = false;
+        syncMode();
+      });
+      for (const b of boxes) {
+        b.cb.addEventListener('change', () => {
+          if (b.cb.checked) fullCb.checked = false;
+          syncMode();
+        });
+      }
+
       const actions = document.createElement('div');
-      actions.className = 'ch-actions';
+      actions.className = 'actions';
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
       cancelBtn.textContent = '取消';
       const okBtn = document.createElement('button');
       okBtn.type = 'button';
       okBtn.textContent = '开始识别';
-      okBtn.className = 'ch-ok';
+      okBtn.className = 'ok';
       actions.appendChild(cancelBtn);
       actions.appendChild(okBtn);
 
       const close = result => {
         window.removeEventListener('keydown', onKey);
-        overlay.remove();
+        host.remove();
         resolve(result);
       };
       const onKey = e => { if (e.key === 'Escape') close(null); };
       cancelBtn.addEventListener('click', () => close(null));
       okBtn.addEventListener('click', () => {
         if (fullCb.checked) { close({ mode: 'full' }); return; }
-        const picked = chapters.filter((_, i) => boxes[i].checked);
+        const picked = chapters.filter((_, i) => boxes[i].cb.checked);
         if (!picked.length) { showToast('请至少勾选一个章节，或保持全篇'); return; }
         close({ mode: 'chapters', ranges: picked });
       });
@@ -1060,7 +1095,8 @@
       panel.appendChild(list);
       panel.appendChild(actions);
       overlay.appendChild(panel);
-      document.body.appendChild(overlay);
+      root.appendChild(overlay);
+      document.body.appendChild(host);
     });
   }
 
@@ -2727,21 +2763,7 @@
     }
   }
 
-  GM_addStyle(`
-    #bili-sub-chapter-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2147483646;display:flex;align-items:center;justify-content:center}
-    #bili-sub-chapter-panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min-430px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
-    #bili-sub-chapter-panel .ch-title{font-size:16px;font-weight:600;padding:14px 16px 4px}
-    #bili-sub-chapter-panel .ch-hint{font-size:12px;color:#888;padding:0 16px 8px}
-    #bili-sub-chapter-panel .ch-list{overflow-y:auto;padding:4px 16px;flex:1}
-    #bili-sub-chapter-panel .ch-row{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer}
-    #bili-sub-chapter-panel .ch-row:hover{background:#f2f3f5}
-    #bili-sub-chapter-panel .ch-row input{width:15px;height:15px;cursor:pointer}
-    #bili-sub-chapter-panel .ch-row input:disabled{cursor:not-allowed}
-    #bili-sub-chapter-panel .ch-full{font-weight:600;border-bottom:1px solid #eee;margin-bottom:4px}
-    #bili-sub-chapter-panel .ch-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #eee}
-    #bili-sub-chapter-panel .ch-actions button{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px}
-    #bili-sub-chapter-panel .ch-actions button.ch-ok{background:#00aeec;border-color:#00aeec;color:#fff}
-  `);
+  
 
   function isHidden() {
     return localStorage.getItem(HIDDEN_KEY) === '1';
