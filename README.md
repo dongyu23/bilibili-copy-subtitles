@@ -1,12 +1,20 @@
 # Bilibili / YouTube / 视频号 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-1.8.0-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.0.0-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube** 和 **微信视频号**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字。
 
 复制结果保留正文标点，不包含时间戳、字幕序号、JSON 字段或其他字幕文件边界符号，适合整理笔记、检索内容和制作摘要。脚本会按当前视频和分 P 缓存字幕列表及正文，重复读取时不会重新随机匹配其他视频的字幕。对于没有字幕的视频，可以在设置 StepFun API Key 后回退到语音识别，自动生成可复制的纯文字内容。
+
+## v2.0.0 新特性
+
+- **章节选择**：从播放器接口读取视频章节，识别前可选全篇或自由勾选任意章节组合；没有章节的视频不弹面板，行为与之前完全一致。章节模式下输出带 `【章节名】` 分隔。
+- **流式分段识别**：HTTP Range 滑动窗口边下边切，按 moof 边界分片，稳态内存与视频长度无关（7 小时视频从 600MB+ 降到约 50–80MB）。
+- **断点续传**：分片级 checkpoint 写入扩展存储，中断后重跑自动跳过已完成分片；油猴菜单可一键清除断点。
+- **工作标签页隔离**：识别在独立的轻量标签页执行，即使它崩溃也不会打断视频页正在写入的本地存储。
+- **有界并发**：在途分片总字节设上限，大片自动降并发。
 
 ## 安装
 

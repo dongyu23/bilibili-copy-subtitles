@@ -1,17 +1,16 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      1.8.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。
+// @version      2.0.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
-// @downloadURL  https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
-// @updateURL    https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
 // @match        https://www.bilibili.com/video/*
 // @match        https://www.bilibili.com/list/*
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/medialist/play/*
+// @match        https://www.bilibili.com/404
 // @match        https://www.youtube.com/watch*
 // @match        https://channels.weixin.qq.com/*
 // @match        https://yuanbao.tencent.com/*
@@ -37,6 +36,8 @@
 // @connect      finder.video.qq.com
 // @run-at       document-idle
 // @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
+// @updateURL    https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
 // ==/UserScript==
 
 (function () {
@@ -99,6 +100,19 @@
   // 分片之间无依赖，可并行送识别；StepFun 未公布单 Key 并发上限，保守取 3，触发限流再调低。
   const ASR_CONCURRENCY = 3;
   const ASR_REQUEST_TIMEOUT_MS = 4 * 60 * 1000;
+
+  // ===== Fork v2：章节选择 / 流式分段下载 / 断点续传 / 独立工作标签页 =====
+  const CHAPTER_CACHE_PREFIX = 'video-chapters-v1:';
+  const CHECKPOINT_PREFIX = 'asr-checkpoint-v2:';
+  const CHECKPOINT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+  const AUDIO_WINDOW_BYTES = 32 * 1024 * 1024;   // 流式下载滑动窗口
+  const ASR_INFLIGHT_BUDGET = 24 * 1024 * 1024;  // 在途分片总字节上限（控制并发瞬态）
+  const PROBE_BYTES = 512 * 1024;                // 时间->字节 二分探测窗口
+  const LONG_VIDEO_WARN_S = 3600;                // 超过 1 小时给出提示
+  const WORKER_TAB_NAME = 'bili-asr-worker';
+  const WORKER_TAB_URL = 'https://www.bilibili.com/404';
+
+  const isWorkerTab = () => { try { return window.name === WORKER_TAB_NAME; } catch (_) { return false; } };
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
   const KEY_PANEL_ID = 'bili-copy-asr-key-panel';
 
@@ -671,6 +685,462 @@
     for (const key of listCacheKeys()) {
       try { GM_deleteValue(key); } catch (_) { /* 忽略存储异常 */ }
     }
+  }
+
+  // ===== Fork：章节 / 流式分段 / 断点 =====
+
+  function concatU8(a, b) {
+    if (!a.length) return b;
+    if (!b.length) return a;
+    const out = new Uint8Array(a.length + b.length);
+    out.set(a, 0);
+    out.set(b, a.length);
+    return out;
+  }
+
+  function readU32(bytes, off) {
+    return ((bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]) >>> 0;
+  }
+  function readU64(bytes, off) {
+    return readU32(bytes, off) * 0x100000000 + readU32(bytes, off + 4);
+  }
+  function boxTypeAt(bytes, off) {
+    return String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+  }
+  function walkBoxes(bytes, start, end) {
+    const boxes = [];
+    let off = start;
+    while (off + 8 <= end) {
+      const size = readU32(bytes, off);
+      if (size < 8 || off + size > end) break; // 半包，留给下一轮补窗口
+      boxes.push({ type: boxTypeAt(bytes, off), start: off, size });
+      off += size;
+    }
+    return boxes;
+  }
+  const CONTAINER_BOXES = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'moof', 'traf', 'mvex', 'edts', 'moof']);
+  function collectBoxes(bytes, start, end, type, out = [], depth = 0) {
+    if (depth > 6) return out;
+    for (const box of walkBoxes(bytes, start, end)) {
+      if (box.type === type) out.push(box);
+      if (CONTAINER_BOXES.has(box.type)) {
+        collectBoxes(bytes, box.start + 8, Math.min(box.start + box.size, end), type, out, depth + 1);
+      }
+    }
+    return out;
+  }
+  function parseTimescale(bytes, start, end) {
+    const mdhd = collectBoxes(bytes, start, end, 'mdhd')[0];
+    if (!mdhd) return 1000;
+    const version = bytes[mdhd.start + 8];
+    return version === 1 ? readU32(bytes, mdhd.start + 28) : readU32(bytes, mdhd.start + 20);
+  }
+  function parseMoofTimeMs(bytes, moofStart, timescale) {
+    const moofSize = readU32(bytes, moofStart);
+    const tfdt = collectBoxes(bytes, moofStart + 8, moofStart + moofSize, 'tfdt')[0];
+    if (!tfdt) return null;
+    const version = bytes[tfdt.start + 8];
+    const raw = version === 1 ? readU64(bytes, tfdt.start + 12) : readU32(bytes, tfdt.start + 12);
+    return (raw / timescale) * 1000;
+  }
+
+  // 带 Range 的请求；CDN 忽略 Range 返回 200 全量时直接拒绝（调用方走兜底）
+  function gmRangeRequest(url, start, end) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        headers: end == null ? { Range: `bytes=${start}-` } : { Range: `bytes=${start}-${end}` },
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        onload: r => {
+          if (r.status !== 206 && r.status !== 200) { reject(new Error(`HTTP ${r.status}`)); return; }
+          if (r.status === 200 && start > 0) { reject(new Error('CDN 不支持 Range')); return; }
+          const bytes = new Uint8Array(r.response || []);
+          if (start > 0 && bytes.length > PROBE_BYTES * 8) { reject(new Error('CDN 忽略 Range 返回全量')); return; }
+          let total = null;
+          const m = /bytes\s+\d+-\d+\/(\d+)/i.exec(r.responseHeaders || '');
+          if (m) total = Number(m[1]);
+          resolve({ bytes, total });
+        },
+        onerror: () => reject(new Error('网络错误')),
+        ontimeout: () => reject(new Error('请求超时')),
+      });
+    });
+  }
+
+  // 取音频头部（ftyp+moov+sidx）与 timescale
+  async function fetchAudioHeader(url) {
+    let size = 1024 * 1024;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { bytes, total } = await gmRangeRequest(url, 0, size - 1);
+      const boxes = walkBoxes(bytes, 0, bytes.length);
+      const firstMoof = boxes.find(b => b.type === 'moof');
+      if (firstMoof) {
+        return {
+          header: bytes.slice(0, firstMoof.start),
+          headerEnd: firstMoof.start,
+          timescale: parseTimescale(bytes, 0, firstMoof.start),
+          total,
+        };
+      }
+      size *= 8;
+    }
+    throw new Error('音频头部解析失败（未找到 moof，可能不是 fMP4/DASH 音轨）');
+  }
+
+  async function probeTimeAt(url, pos, headerInfo) {
+    const { bytes } = await gmRangeRequest(url, pos, pos + PROBE_BYTES - 1);
+    // 窗口起点可能落在 box 中间导致走包失步，先按 moof 四字节特征扫描再校验
+    for (let i = 0; i + 8 <= bytes.length; i++) {
+      if (bytes[i + 4] !== 0x6d || bytes[i + 5] !== 0x6f || bytes[i + 6] !== 0x6f || bytes[i + 7] !== 0x66) continue;
+      const size = readU32(bytes, i);
+      if (size < 8 || i + size > bytes.length) continue;
+      const t = parseMoofTimeMs(bytes, i, headerInfo.timescale);
+      if (t != null) return { timeMs: t, bytePos: pos + i };
+    }
+    return null;
+  }
+
+  // 时间 -> 字节：二分探测（time 随 offset 单调），收敛后微调到第一个 time >= tMs 的 moof
+  async function findByteForTime(url, totalSize, tMs, headerInfo) {
+    let lo = 0, hi = totalSize;
+    for (let i = 0; i < 16 && hi - lo > 64 * 1024; i++) {
+      const mid = Math.floor((lo + hi) / 2);
+      const p = await probeTimeAt(url, mid, headerInfo);
+      if (!p) { hi = mid; continue; }
+      if (p.timeMs < tMs) lo = mid; else hi = mid;
+    }
+    const { bytes } = await gmRangeRequest(url, lo, lo + PROBE_BYTES - 1);
+    for (const b of walkBoxes(bytes, 0, bytes.length)) {
+      if (b.type !== 'moof') continue;
+      const t = parseMoofTimeMs(bytes, b.start, headerInfo.timescale);
+      if (t != null && t >= tMs) return lo + b.start;
+    }
+    return lo;
+  }
+
+  // 流式分段：只保留滑动窗口，按 moof+mdat 边界凑片，每片拼头部保证可独立解码
+  async function* streamRangeChunks(url, headerInfo, range, maxChunkBytes, onProgress, refreshTrack) {
+    let curUrl = url;
+    let pos = range.start;
+    let buf = new Uint8Array(0);
+    let pending = [];
+    let pendingSize = 0;
+    let seenMoof = false;
+    let eof = false;
+    const flush = () => {
+      if (!pending.length) return null;
+      let total = headerInfo.header.length;
+      for (const f of pending) total += f.length;
+      const chunk = new Uint8Array(total);
+      chunk.set(headerInfo.header, 0);
+      let c = headerInfo.header.length;
+      for (const f of pending) { chunk.set(f, c); c += f.length; }
+      pending = [];
+      pendingSize = 0;
+      return chunk;
+    };
+    while (!eof || buf.length) {
+      while (!eof && buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < range.end) {
+        const start = pos + buf.length;
+        const want = Math.min(AUDIO_WINDOW_BYTES - buf.length, range.end - start);
+        try {
+          const r = await gmRangeRequest(curUrl, start, start + want - 1);
+          if (!r.bytes.length) { eof = true; break; }
+          buf = concatU8(buf, r.bytes);
+        } catch (error) {
+          if (refreshTrack) {
+            try {
+              const t = await refreshTrack();
+              if (t && t.url) { curUrl = t.url; continue; }
+            } catch (_) { /* 交给外层抛出 */ }
+          }
+          throw error;
+        }
+      }
+      let off = 0;
+      while (off + 8 <= buf.length) {
+        const size = readU32(buf, off);
+        if (size < 8 || off + size > buf.length) break;
+        const type = boxTypeAt(buf, off);
+        if (type === 'moof') {
+          const t = parseMoofTimeMs(buf, off, headerInfo.timescale);
+          if (t != null && t >= range.endMs) { // 到达章节末尾，收尾
+            eof = true;
+            break;
+          }
+          seenMoof = true;
+          if (pendingSize + size > maxChunkBytes && pending.length) {
+            const chunk = flush();
+            if (chunk) yield chunk;
+          }
+        }
+        if (seenMoof) {
+          pending.push(buf.slice(off, off + size));
+          pendingSize += size;
+        }
+        off += size;
+      }
+      pos += off;
+      if (off) buf = buf.slice(off);
+      if (onProgress && range.end > range.start) {
+        try { onProgress(Math.min(1, pos / range.end)); } catch (_) { /* ignore */ }
+      }
+      if (eof && !buf.length) {
+        const chunk = flush();
+        if (chunk) yield chunk;
+      }
+    }
+  }
+
+  // 断点：按片落 GM 存储，重跑跳过已完成片
+  function checkpointKey(videoKey, selHash, rangeIdx, chunkIdx) {
+    return `${CHECKPOINT_PREFIX}${videoKey}|${selHash}|${rangeIdx}|${chunkIdx}`;
+  }
+  function readCheckpoint(key) {
+    try {
+      const raw = GM_getValue(key, '');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || Date.now() - Date.parse(parsed.cachedAt) > CHECKPOINT_MAX_AGE_MS) return null;
+      return parsed.value;
+    } catch (_) { return null; }
+  }
+  function writeCheckpoint(key, value) {
+    try { GM_setValue(key, JSON.stringify({ value, cachedAt: new Date().toISOString() })); } catch (_) { /* ignore */ }
+  }
+  function clearCheckpointsFor(videoKey, selHash) {
+    if (typeof GM_listValues !== 'function') return;
+    const prefix = `${CHECKPOINT_PREFIX}${videoKey}|${selHash}|`;
+    for (const k of GM_listValues()) {
+      if (k.startsWith(prefix)) { try { GM_deleteValue(k); } catch (_) { /* ignore */ } }
+    }
+  }
+
+  // 有界并发：在途总字节不超过预算，顺序由 index 保证
+  async function mapWithBudget(iter, fn, budgetBytes) {
+    const out = [];
+    let inflight = 0;
+    let index = 0;
+    let pullDone = false;
+    let error = null;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const worker = async () => {
+      while (!pullDone && !error) {
+        while (inflight >= budgetBytes && !pullDone && !error) await sleep(60);
+        if (pullDone || error) return;
+        const r = await iter.next();
+        if (r.done) { pullDone = true; return; }
+        const idx = index++;
+        inflight += r.value.length;
+        try { out[idx] = await fn(r.value, idx); } catch (e) { error = e; }
+        finally { inflight -= r.value.length; }
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+    if (error) throw error;
+    return out;
+  }
+
+  async function fetchVideoChapters(video) {
+    if (video.site !== 'bilibili') return null;
+    try {
+      const params = new URLSearchParams({ cid: String(video.cid) });
+      if (video.bvid) params.set('bvid', video.bvid);
+      else if (video.aid) params.set('aid', String(video.aid));
+      const result = await requestJson(`https://api.bilibili.com/x/player/v2?${params.toString()}`);
+      if (!result || result.code !== 0) return null;
+      const raw = Array.isArray(result.data && result.data.view_points) ? result.data.view_points : [];
+      const points = raw.filter(p => p && Number.isFinite(Number(p.from)) && Number.isFinite(Number(p.to)) && Number(p.to) > Number(p.from));
+      if (points.length < 2) return null; // 0/1 个点等于没有章节
+      return points.map((p, i) => ({
+        id: `ch-${i}-${Number(p.from)}`,
+        title: String(p.content || `章节 ${i + 1}`).slice(0, 60),
+        startMs: Number(p.from) * 1000,
+        endMs: Number(p.to) * 1000,
+      }));
+    } catch (error) {
+      console.warn('[复制字幕] 章节获取失败，按无章节处理', error);
+      return null;
+    }
+  }
+
+  function selectionHash(selection) {
+    if (!selection || selection.mode === 'full') return 'full';
+    return 'ch:' + selection.ranges.map(r => r.id || r.startMs).join(',');
+  }
+  function selectionDurationMs(selection, totalMs) {
+    if (!selection || selection.mode === 'full') return totalMs;
+    return selection.ranges.reduce((sum, r) => sum + Math.max(0, r.endMs - r.startMs), 0);
+  }
+  function fmtClock(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(ss).padStart(2, '0')}`;
+  }
+
+  function showChapterPanel(chapters, track) {
+    return new Promise(resolve => {
+      const totalMs = (track && track.duration ? track.duration : 0) * 1000;
+      const overlay = document.createElement('div');
+      overlay.id = 'bili-sub-chapter-overlay';
+      const panel = document.createElement('div');
+      panel.id = 'bili-sub-chapter-panel';
+      const title = document.createElement('div');
+      title.className = 'ch-title';
+      title.textContent = '选择识别范围';
+      const hint = document.createElement('div');
+      hint.className = 'ch-hint';
+      hint.textContent = '默认全篇；取消“全篇”后可自由勾选章节，仅识别所选内容。';
+      const list = document.createElement('div');
+      list.className = 'ch-list';
+
+      const fullRow = document.createElement('label');
+      fullRow.className = 'ch-row ch-full';
+      const fullCb = document.createElement('input');
+      fullCb.type = 'checkbox';
+      fullCb.checked = true;
+      const fullText = document.createElement('span');
+      fullText.textContent = `全篇（${fmtClock(totalMs)}）`;
+      fullRow.appendChild(fullCb);
+      fullRow.appendChild(fullText);
+      list.appendChild(fullRow);
+
+      const boxes = [];
+      for (const ch of chapters) {
+        const row = document.createElement('label');
+        row.className = 'ch-row';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = false;
+        cb.disabled = true;
+        const span = document.createElement('span');
+        span.textContent = `${ch.title}（${fmtClock(ch.startMs)} - ${fmtClock(ch.endMs)}）`;
+        row.appendChild(cb);
+        row.appendChild(span);
+        list.appendChild(row);
+        boxes.push(cb);
+      }
+      fullCb.addEventListener('change', () => {
+        const on = fullCb.checked;
+        for (const b of boxes) { b.checked = false; b.disabled = on; }
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'ch-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = '取消';
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.textContent = '开始识别';
+      okBtn.className = 'ch-ok';
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+
+      const close = result => {
+        window.removeEventListener('keydown', onKey);
+        overlay.remove();
+        resolve(result);
+      };
+      const onKey = e => { if (e.key === 'Escape') close(null); };
+      cancelBtn.addEventListener('click', () => close(null));
+      okBtn.addEventListener('click', () => {
+        if (fullCb.checked) { close({ mode: 'full' }); return; }
+        const picked = chapters.filter((_, i) => boxes[i].checked);
+        if (!picked.length) { showToast('请至少勾选一个章节，或保持全篇'); return; }
+        close({ mode: 'chapters', ranges: picked });
+      });
+      overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+      window.addEventListener('keydown', onKey);
+
+      panel.appendChild(title);
+      panel.appendChild(hint);
+      panel.appendChild(list);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+    });
+  }
+
+  // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
+  function attachAsrWorker() {
+    const announce = () => { try { window.opener && window.opener.postMessage({ type: 'asr-worker-ready' }, '*'); } catch (_) { /* ignore */ } };
+    announce();
+    window.addEventListener('message', async event => {
+      const data = event.data;
+      if (!data) return;
+      if (data.type === 'asr-ping') {
+        try { event.source.postMessage({ type: 'asr-worker-ready' }, '*'); } catch (_) { /* ignore */ }
+        return;
+      }
+      if (data.type !== 'asr-job') return;
+      const reply = event.source;
+      const post = msg => { try { reply.postMessage(Object.assign({ type: 'asr-progress', jobId: data.jobId }, msg), '*'); } catch (_) { /* ignore */ } };
+      const video = { site: 'bilibili', cid: data.cid, bvid: data.bvid, aid: data.aid, videoKey: data.videoKey };
+      try {
+        post({ stage: 'start' });
+        const result = await transcribeVideoAudio(video, data.track, data.selection, {
+          onDownloadProgress: f => post({ stage: 'download', fraction: f }),
+          onChunkDelta: () => post({ stage: 'chunk' }),
+          refreshTrack: () => fetchBilibiliAudioTrack(video),
+        });
+        post({ stage: 'done', text: result.text, chunkCount: result.chunkCount });
+      } catch (error) {
+        post({ stage: 'error', message: String(error && error.message || error) });
+      }
+    });
+  }
+
+  function runAsrWithWorker(video, track, selection, ui) {
+    return new Promise((resolve, reject) => {
+      let worker = null;
+      let settled = false;
+      const clean = () => {
+        settled = true;
+        window.removeEventListener('message', onMessage);
+        window.removeEventListener('message', onReady);
+        clearTimeout(readyTimer);
+        try { worker && worker.close(); } catch (_) { /* ignore */ }
+      };
+      const onMessage = event => {
+        const d = event.data;
+        if (!d || d.type !== 'asr-progress') return;
+        if (d.stage === 'download') ui.progress('正在下载音频', typeof d.fraction === 'number' ? d.fraction : null, '');
+        else if (d.stage === 'chunk') ui.progress('正在识别', null, '');
+        else if (d.stage === 'done') { clean(); resolve({ text: d.text, chunkCount: d.chunkCount }); }
+        else if (d.stage === 'error') { clean(); reject(new Error(d.message)); }
+      };
+      const onReady = event => {
+        if (!event.data || event.data.type !== 'asr-worker-ready') return;
+        clearTimeout(readyTimer);
+        window.removeEventListener('message', onReady);
+        try {
+          worker.postMessage({
+            type: 'asr-job',
+            jobId: Date.now(),
+            track,
+            selection,
+            videoKey: videoCacheKey(video),
+            cid: video.cid,
+            bvid: video.bvid,
+            aid: video.aid,
+          }, '*');
+        } catch (error) { clean(); reject(error); }
+      };
+      const readyTimer = setTimeout(() => {
+        if (!settled) { clean(); reject(new Error('工作标签页未就绪')); }
+      }, 10000);
+
+      try {
+        worker = window.open(WORKER_TAB_URL, WORKER_TAB_NAME);
+      } catch (_) { worker = null; }
+      if (!worker) { clean(); reject(new Error('无法打开工作标签页')); return; }
+      window.addEventListener('message', onMessage);
+      window.addEventListener('message', onReady);
+      try { worker.postMessage({ type: 'asr-ping' }, '*'); } catch (_) { /* ignore */ }
+    });
   }
 
   // ===== 无字幕视频的语音识别兜底 =====
@@ -1632,69 +2102,65 @@
     return finalText;
   }
 
-  async function transcribeVideoAudio(video, track) {
+  async function transcribeVideoAudio(video, track, selection, hooks = {}) {
     const apiKey = getAsrApiKey();
-    if (!apiKey) {
-      throw new Error('尚未设置 StepFun API Key，请通过菜单设置');
+    if (!apiKey) throw new Error('尚未设置 StepFun API Key，请通过菜单设置');
+    const videoKey = video.videoKey || videoCacheKey(video);
+    const selHash = selectionHash(selection);
+
+    updateProgress('正在读取音频结构', null, '');
+    const headerInfo = await fetchAudioHeader(track.url);
+    const totalSize = headerInfo.total;
+    if (!totalSize) throw new Error('无法确定音频总大小（CDN 未返回 Content-Range）');
+    const totalMs = (track.duration || 0) * 1000;
+
+    // 组装字节区间：全篇或按章节（时间 -> 字节二分定位，重叠区间合并）
+    let ranges;
+    if (!selection || selection.mode === 'full') {
+      ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY, start: 0, end: totalSize }];
+    } else {
+      const picked = [];
+      for (const r of selection.ranges) {
+        const start = await findByteForTime(track.url, totalSize, r.startMs, headerInfo);
+        const end = r.endMs >= totalMs ? totalSize : await findByteForTime(track.url, totalSize, r.endMs, headerInfo);
+        picked.push({ title: r.title, startMs: r.startMs, endMs: r.endMs, start, end: Math.max(end, start + 4096) });
+      }
+      picked.sort((a, b) => a.start - b.start);
+      ranges = [];
+      for (const r of picked) {
+        const last = ranges[ranges.length - 1];
+        if (last && r.start - last.end < 1024 * 1024) {
+          last.end = Math.max(last.end, r.end);
+          last.title = last.title ? `${last.title} + ${r.title}` : r.title;
+        } else {
+          ranges.push(Object.assign({}, r));
+        }
+      }
     }
 
-    updateProgress('正在下载音频', null, '连接中');
-    const bytes = await downloadAudioBytes(track, (loaded, total) => {
-      updateProgress('正在下载音频', total ? loaded / total : null, `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
-      // 全部直连失败时换取新的播放数据地址重试（URL 过期或 CDN 节点拒绝）。
-    }, () => fetchAudioTrack(video));
+    const results = [];
+    let chunkCount = 0;
+    for (let ri = 0; ri < ranges.length; ri++) {
+      const range = ranges[ri];
+      const stream = streamRangeChunks(track.url, headerInfo, range, MAX_AUDIO_CHUNK_BYTES,
+        hooks.onDownloadProgress, hooks.refreshTrack);
+      const texts = await mapWithBudget(stream, async (chunk, idx) => {
+        const ck = checkpointKey(videoKey, selHash, ri, idx);
+        const cached = readCheckpoint(ck);
+        if (cached != null) return cached;
+        const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
+        writeCheckpoint(ck, text);
+        return text;
+      }, ASR_INFLIGHT_BUDGET);
+      chunkCount += texts.length;
+      results.push({ title: range.title, text: texts.filter(t => typeof t === 'string').join('') });
+      if (hooks.onRangeDone) hooks.onRangeDone(ri + 1, ranges.length);
+    }
 
-    const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
-    const totalDurationMs = (track.duration || 0) * 1000;
-    // 各分片独立识别、结果按序号拼接，保证文字顺序与串行一致。
-    const results = new Array(chunks.length).fill('');
-    let completed = 0;
-    let firstError = null;
-    // 在途分片各自的完成度（由 SSE 增量时间戳换算），聚合出总进度。
-    const inflightFractions = new Map();
-
-    const reportProgress = () => {
-      const stageText = chunks.length > 1 ? `正在识别（${completed}/${chunks.length} 段）` : '正在识别';
-      let inflight = 0;
-      for (const fraction of inflightFractions.values()) inflight += fraction;
-      updateProgress(stageText, (completed + inflight) / chunks.length,
-        chunks.length > 1 ? `并行 ${inflightFractions.size} 段` : '');
-    };
-
-    const transcribeChunk = async index => {
-      // 分片时长按体积占比估算，用于把增量时间戳换算成该片的完成度。
-      const chunkDurationMs = bytes.length > 0
-        ? (chunks[index].length / bytes.length) * totalDurationMs
-        : 0;
-      inflightFractions.set(index, 0);
-      reportProgress();
-      try {
-        results[index] = await transcribeAudioChunk(chunks[index], apiKey, endTimeMs => {
-          if (!inflightFractions.has(index)) return;
-          inflightFractions.set(index, chunkDurationMs > 0 ? Math.min(1, endTimeMs / chunkDurationMs) : 0);
-          reportProgress();
-        });
-      } catch (error) {
-        // 任一片失败即整体失败，与串行时一致；先记下错误，让在途请求自然结束后再抛出。
-        if (!firstError) firstError = error;
-      } finally {
-        inflightFractions.delete(index);
-        completed += 1;
-        reportProgress();
-      }
-    };
-
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < chunks.length && !firstError) {
-        const index = cursor;
-        cursor += 1;
-        await transcribeChunk(index);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(ASR_CONCURRENCY, chunks.length) }, worker));
-    if (firstError) throw firstError;
-    return { text: normalizeSubtitle([{ content: results.join('') }]), chunkCount: chunks.length };
+    const assembled = results.length === 1 && !results[0].title
+      ? results[0].text
+      : results.map(r => (r.title ? `【${r.title}】\n${r.text}` : r.text)).join('\n');
+    return { text: normalizeSubtitle([{ content: assembled }]), chunkCount };
   }
 
   // ===== 视频号（微信 Channels）转文字 =====
@@ -2157,15 +2623,31 @@
         }
         // 先取音频信息（不含下载），用于展示时长与预估耗时。
         const track = await fetchAudioTrack(video);
-        const estimateSeconds = estimateAsrSeconds(track.duration);
+        // Fork：章节选择（无章节则保持原行为）
+        let chapters = readCache(CHAPTER_CACHE_PREFIX, videoKey);
+        if (chapters === null || chapters === undefined) {
+          chapters = await fetchVideoChapters(video);
+          writeCache(CHAPTER_CACHE_PREFIX, videoKey, chapters);
+        }
+        let selection = { mode: 'full' };
+        if (Array.isArray(chapters) && chapters.length) {
+          const picked = await showChapterPanel(chapters, track);
+          if (!picked) return; // 用户取消
+          selection = picked;
+        }
+        const selHash = selectionHash(selection);
+        const scopeMs = selectionDurationMs(selection, (track.duration || 0) * 1000);
+        const estimateSeconds = estimateAsrSeconds(track.duration) * (track.duration ? scopeMs / (track.duration * 1000) : 1);
         if (!asrConsentGiven && !window.confirm(
-          `当前视频没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
+          (selection.mode === 'full'
+            ? `当前视频没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
+            : `当前视频没有字幕，将识别所选 ${selection.ranges.length} 个章节（约 ${formatAudioDuration(scopeMs / 1000)}）`)
           + `并通过 StepFun 语音识别生成文字，会产生费用并上传音频。`
           + `${estimateSeconds > 0 ? `根据历史记录预计用时约 ${Math.round(estimateSeconds)} 秒。` : ''}是否继续？`
         )) return;
         asrConsentGiven = true;
 
-        const asrCacheKey = `${videoCacheKey(video)}:asr-v1`;
+        const asrCacheKey = `${videoKey}:asr-v2:${selHash}`;
         let text = readCache(BODY_CACHE_PREFIX, asrCacheKey);
         const fromCache = !!text;
         const startedAt = Date.now();
@@ -2173,7 +2655,20 @@
         if (!text) {
           showProgressPanel();
           try {
-            const result = await transcribeVideoAudio(video, track);
+            let result;
+            const ui = { progress: (stage, fraction, detail) => updateProgress(stage, fraction, detail) };
+            try {
+              result = await runAsrWithWorker(video, track, selection, ui);
+            } catch (workerError) {
+              console.warn('[复制字幕] 工作标签页不可用，回退本页识别', workerError);
+              showToast(`工作标签页不可用（${workerError.message || workerError}），已回退本页识别`);
+              result = await transcribeVideoAudio(video, track, selection, {
+                onDownloadProgress: f => updateProgress('正在下载音频', f, ''),
+                onChunkDelta: () => updateProgress('正在识别', null, ''),
+                refreshTrack: () => fetchAudioTrack(video),
+              });
+            }
+            clearCheckpointsFor(videoKey, selHash);
             text = result.text;
             chunkCount = result.chunkCount;
           } finally {
@@ -2188,7 +2683,7 @@
         // 仅统计真实发生的识别，缓存命中不写入历史。
         if (!fromCache) {
           pushAsrHistory({
-            audioSeconds: track.duration || 0,
+            audioSeconds: Math.round(scopeMs / 1000),
             elapsedMs,
             chunkCount,
             at: Date.now(),
@@ -2231,6 +2726,22 @@
       }
     }
   }
+
+  GM_addStyle(`
+    #bili-sub-chapter-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2147483646;display:flex;align-items:center;justify-content:center}
+    #bili-sub-chapter-panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min-430px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+    #bili-sub-chapter-panel .ch-title{font-size:16px;font-weight:600;padding:14px 16px 4px}
+    #bili-sub-chapter-panel .ch-hint{font-size:12px;color:#888;padding:0 16px 8px}
+    #bili-sub-chapter-panel .ch-list{overflow-y:auto;padding:4px 16px;flex:1}
+    #bili-sub-chapter-panel .ch-row{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer}
+    #bili-sub-chapter-panel .ch-row:hover{background:#f2f3f5}
+    #bili-sub-chapter-panel .ch-row input{width:15px;height:15px;cursor:pointer}
+    #bili-sub-chapter-panel .ch-row input:disabled{cursor:not-allowed}
+    #bili-sub-chapter-panel .ch-full{font-weight:600;border-bottom:1px solid #eee;margin-bottom:4px}
+    #bili-sub-chapter-panel .ch-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid #eee}
+    #bili-sub-chapter-panel .ch-actions button{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px}
+    #bili-sub-chapter-panel .ch-actions button.ch-ok{background:#00aeec;border-color:#00aeec;color:#fff}
+  `);
 
   function isHidden() {
     return localStorage.getItem(HIDDEN_KEY) === '1';
@@ -2280,21 +2791,34 @@
     document.body.appendChild(controls);
   }
 
-  GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
-  GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
-  GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
-  GM_registerMenuCommand('显示/隐藏页面按钮', () => {
-    const hidden = !isHidden();
-    localStorage.setItem(HIDDEN_KEY, hidden ? '1' : '0');
-    const button = document.getElementById(BUTTON_ID);
-    if (button) button.dataset.hidden = String(hidden);
-    const controls = document.getElementById(CONTROLS_ID);
-    if (controls) controls.dataset.hidden = String(hidden);
-  });
+  if (isWorkerTab()) {
+    // Fork：工作标签页只接识别任务，不挂任何 UI
+    attachAsrWorker();
+  } else {
+    GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
+    GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
+    GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
+    GM_registerMenuCommand('显示/隐藏页面按钮', () => {
+      const hidden = !isHidden();
+      localStorage.setItem(HIDDEN_KEY, hidden ? '1' : '0');
+      const button = document.getElementById(BUTTON_ID);
+      if (button) button.dataset.hidden = String(hidden);
+      const controls = document.getElementById(CONTROLS_ID);
+      if (controls) controls.dataset.hidden = String(hidden);
+    });
+    GM_registerMenuCommand('清除识别断点', () => {
+      if (typeof GM_listValues !== 'function') return;
+      let n = 0;
+      for (const k of GM_listValues()) {
+        if (k.startsWith(CHECKPOINT_PREFIX)) { try { GM_deleteValue(k); n++; } catch (_) { /* ignore */ } }
+      }
+      showToast(`已清除 ${n} 条识别断点`);
+    });
 
-  mountButton();
-  new MutationObserver(mountButton).observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
+    mountButton();
+    new MutationObserver(mountButton).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }
 })();
