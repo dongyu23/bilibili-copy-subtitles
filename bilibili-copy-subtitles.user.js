@@ -10,7 +10,6 @@
 // @match        https://www.bilibili.com/list/*
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/medialist/play/*
-// @match        https://www.bilibili.com/404
 // @match        https://www.youtube.com/watch*
 // @match        https://channels.weixin.qq.com/*
 // @match        https://yuanbao.tencent.com/*
@@ -28,6 +27,7 @@
 // @connect      aisubtitle.hdslb.com
 // @connect      *.hdslb.com
 // @connect      *.bilivideo.com
+// @connect      *.bilivideo.cn
 // @connect      *.akamaized.net
 // @connect      api.stepfun.com
 // @connect      www.youtube.com
@@ -111,9 +111,7 @@
   const PROBE_BYTES = 128 * 1024;                // 时间->字节 探测窗口（128KB 足够容纳多个音频分片）
   const LONG_VIDEO_WARN_S = 3600;                // 超过 1 小时给出提示
   const WORKER_TAB_NAME = 'bili-asr-worker';
-  const WORKER_TAB_URL = 'https://www.bilibili.com/404';
 
-  const isWorkerTab = () => { try { return window.name === WORKER_TAB_NAME; } catch (_) { return false; } };
   const PROGRESS_PANEL_ID = 'bili-copy-asr-progress';
   const KEY_PANEL_ID = 'bili-copy-asr-key-panel';
 
@@ -961,11 +959,19 @@
       pos += off;
       if (off) buf = buf.slice(off);
       if (onProgress && range.end > range.start) {
-        try { onProgress(Math.min(1, pos / range.end)); } catch (_) { /* ignore */ }
+        try { onProgress(Math.min(1, (pos - range.start) / Math.max(1, range.end - range.start))); } catch (_) { /* ignore */ }
       }
       if (eof && !buf.length) {
         const chunk = flush();
         if (chunk) yield chunk;
+      }
+      // 防死循环：既无法再取数（区间到头/已达窗口上限）又无法消费（剩余半包）时收尾退出
+      const canFill = !eof && buf.length < AUDIO_WINDOW_BYTES && pos + buf.length < range.end;
+      if (!off && !canFill) {
+        eof = true;
+        const chunk = flush();
+        if (chunk) yield chunk;
+        break;
       }
     }
   }
@@ -1177,60 +1183,125 @@
   }
 
   // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
-  function decorateWorkerPage() {
-    try {
-      document.title = '字幕识别 · 后台工作页';
-      document.documentElement.style.background = '#f6f7f8';
-      document.body.innerHTML = '<div style="font:14px/1.8 system-ui,\'Microsoft YaHei\',sans-serif;color:#333;max-width:440px;margin:14vh auto;padding:26px 30px;background:#fff;border-radius:12px;box-shadow:0 6px 28px rgba(0,0,0,.08)">'
-        + '<div style="font-size:16px;font-weight:600;margin-bottom:6px">字幕识别 · 后台工作页</div>'
-        + '<div style="color:#999;font-size:12px;margin-bottom:14px">语音识别正在此标签页后台运行，请勿关闭；完成后会自动关闭。</div>'
-        + '<div id="asr-worker-status" style="padding:10px 12px;background:#f2f3f5;border-radius:8px;font-size:13px;min-height:20px">等待任务…</div>'
-        + '</div>';
-    } catch (_) { /* ignore */ }
-  }
+  // 工作标签页驱动器（注入到 about:blank 中执行，无 CSP、无第三方脚本、不可能被跳转）
+  const WORKER_DRIVER = `
+    let __endpoint = '', __language = '';
+    function getAsrEndpoint() { return __endpoint; }
+    function getAsrLanguage() { return __language; }
+    function setStatus(t) { const el = document.getElementById('asr-worker-status'); if (el) el.textContent = String(t || ''); }
+    function post(m) { try { (window.opener || window.parent).postMessage(Object.assign({ type: 'asr-progress' }, m), '*'); } catch (e) { /* ignore */ } }
+    function stage(t, f, d) { setStatus(t); post({ stage: 'progress', text: t, fraction: (typeof f === 'number') ? f : null, detail: d || '' }); }
 
-  function setWorkerStatus(text) {
-    const el = document.getElementById('asr-worker-status');
-    if (el) el.textContent = String(text || '');
-  }
-
-  function attachAsrWorker() {
-    decorateWorkerPage();
-    const announce = () => { try { window.opener && window.opener.postMessage({ type: 'asr-worker-ready' }, '*'); } catch (_) { /* ignore */ } };
-    announce();
-    window.addEventListener('message', async event => {
-      const data = event.data;
-      if (!data) return;
-      if (data.type === 'asr-ping') {
-        try { event.source.postMessage({ type: 'asr-worker-ready' }, '*'); } catch (_) { /* ignore */ }
-        return;
+    async function runJob(data) {
+      const totalMs = (data.track && data.track.duration ? data.track.duration : 0) * 1000;
+      stage('正在读取音频结构', null, '');
+      const headerInfo = await fetchAudioHeader(data.track.url);
+      const totalSize = headerInfo.total;
+      if (!totalSize) throw new Error('无法确定音频总大小（CDN 未返回 Content-Range）');
+      let ranges;
+      if (!data.selection || data.selection.mode === 'full') {
+        ranges = [{ title: '', startMs: 0, endMs: Number.POSITIVE_INFINITY, start: 0, end: totalSize }];
+      } else {
+        const rs = data.selection.ranges;
+        const picked = [];
+        for (let bi = 0; bi < rs.length; bi++) {
+          stage('正在定位章节边界 ' + (bi + 1) + '/' + rs.length + '：' + (rs[bi].title || ''), bi / rs.length, '');
+          const s = await findByteForTime(data.track.url, totalSize, rs[bi].startMs, headerInfo);
+          const e = rs[bi].endMs >= totalMs ? totalSize : await findByteForTime(data.track.url, totalSize, rs[bi].endMs, headerInfo);
+          picked.push({ title: rs[bi].title, startMs: rs[bi].startMs, endMs: rs[bi].endMs, start: s, end: Math.max(e, s + 4096) });
+        }
+        picked.sort((a, b) => a.start - b.start);
+        ranges = [];
+        for (const r of picked) {
+          const last = ranges[ranges.length - 1];
+          if (last && r.start - last.end < 1024 * 1024) {
+            last.end = Math.max(last.end, r.end);
+            last.title = last.title ? last.title + ' + ' + r.title : r.title;
+          } else ranges.push(Object.assign({}, r));
+        }
       }
-      if (data.type !== 'asr-job') return;
-      const reply = event.source;
-      const post = msg => { try { reply.postMessage(Object.assign({ type: 'asr-progress', jobId: data.jobId }, msg), '*'); } catch (_) { /* ignore */ } };
-      setWorkerStatus('已接收任务，开始读取音频结构');
-      post({ stage: 'progress', text: '后台标签页已就绪，正在读取音频结构', fraction: null, detail: '' });
-      const video = { site: 'bilibili', cid: data.cid, bvid: data.bvid, aid: data.aid, videoKey: data.videoKey };
+      const totalRangeBytes = ranges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0) || 1;
+      let doneRangeBytes = 0;
+      const results = [];
+      let chunkCount = 0;
+      for (let ri = 0; ri < ranges.length; ri++) {
+        const range = ranges[ri];
+        const rangeBytes = Math.max(1, range.end - range.start);
+        const texts = await mapWithBudget(
+          streamRangeChunks(data.track.url, headerInfo, range, MAX_AUDIO_CHUNK_BYTES,
+            f => stage('正在下载音频', Math.min(1, (doneRangeBytes + f * rangeBytes) / totalRangeBytes),
+              ranges.length > 1 ? '第 ' + (ri + 1) + '/' + ranges.length + ' 段' : ''), null),
+          async (chunk, idx) => {
+            const ck = ri + ':' + idx;
+            if (data.checkpoints && Object.prototype.hasOwnProperty.call(data.checkpoints, ck)) return data.checkpoints[ck];
+            const text = await transcribeAudioChunk(chunk, data.apiKey, () => stage('正在识别', null, ''));
+            post({ stage: 'chunkDone', ri, idx, text });
+            return text;
+          }, ASR_INFLIGHT_BUDGET);
+        chunkCount += texts.length;
+        doneRangeBytes += rangeBytes;
+        results.push({ title: range.title, text: texts.filter(t => typeof t === 'string').join('') });
+      }
+      const assembled = results.length === 1 && !results[0].title
+        ? results[0].text
+        : results.map(r => (r.title ? '【' + r.title + '】\n' + r.text : r.text)).join('\n');
+      return { text: normalizeSubtitle([{ content: assembled }]), chunkCount };
+    }
+
+    window.addEventListener('message', async e => {
+      const d = e.data;
+      if (!d || d.type !== 'asr-job') return;
+      __endpoint = d.endpoint;
+      __language = d.language;
+      setStatus('已接收任务');
       try {
-        const result = await transcribeVideoAudio(video, data.track, data.selection, {
-          onStage: (text, fraction, detail) => {
-            setWorkerStatus(text);
-            post({ stage: 'progress', text, fraction, detail });
-          },
-          onDownloadProgress: f => {
-            setWorkerStatus(`正在下载音频 ${Math.round(f * 100)}%`);
-            post({ stage: 'progress', text: '正在下载音频', fraction: f, detail: '' });
-          },
-          onChunkDelta: () => post({ stage: 'progress', text: '正在识别', fraction: null, detail: '' }),
-          refreshTrack: () => fetchBilibiliAudioTrack(video),
-        });
-        setWorkerStatus('识别完成，正在回传结果…');
-        post({ stage: 'done', text: result.text, chunkCount: result.chunkCount });
-      } catch (error) {
-        setWorkerStatus(`识别失败：${(error && error.message) || error}`);
-        post({ stage: 'error', message: String((error && error.message) || error) });
+        const r = await runJob(d);
+        setStatus('识别完成，正在回传结果…');
+        post({ stage: 'done', text: r.text, chunkCount: r.chunkCount });
+      } catch (err) {
+        setStatus('识别失败：' + ((err && err.message) || err));
+        post({ stage: 'error', message: String((err && err.message) || err) });
       }
     });
+  `;
+
+  function buildWorkerScript() {
+    // 管道函数经 toString() 序列化注入工作页（单一源码，不维护两份）
+    const serialized = [concatU8, readU32, readU64, boxTypeAt, walkBoxes, collectBoxes, parseTimescale,
+      parseMoofTimeMs, parseSidx, byteFromSidx, bytesToBase64, gmRangeRequest, fetchAudioHeader,
+      probeTimeAt, findByteForTime, streamRangeChunks, mapWithBudget, transcribeAudioChunk, normalizeSubtitle]
+      .map(fn => fn.toString()).join('\n');
+    const card = '<div style="font:14px/1.8 system-ui,\'Microsoft YaHei\',sans-serif;color:#333;max-width:440px;margin:14vh auto;padding:26px 30px;background:#fff;border-radius:12px;box-shadow:0 6px 28px rgba(0,0,0,.08)">'
+      + '<div style="font-size:16px;font-weight:600;margin-bottom:6px">字幕识别 · 后台工作页</div>'
+      + '<div style="color:#999;font-size:12px;margin-bottom:14px">语音识别正在此标签页后台运行，请勿关闭；完成后会自动关闭。</div>'
+      + '<div id="asr-worker-status" style="padding:10px 12px;background:#f2f3f5;border-radius:8px;font-size:13px;min-height:20px">等待任务…</div>'
+      + '</div>';
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>字幕识别 · 后台工作页</title>'
+      + '<style>html,body{margin:0;background:#f6f7f8}</style></head><body>' + card + '<script>'
+      + '"use strict";\n'
+      + 'const PROBE_BYTES=' + PROBE_BYTES + ',MAX_AUDIO_CHUNK_BYTES=' + MAX_AUDIO_CHUNK_BYTES
+      + ',AUDIO_WINDOW_BYTES=' + AUDIO_WINDOW_BYTES + ',ASR_INFLIGHT_BUDGET=' + ASR_INFLIGHT_BUDGET
+      + ',ASR_REQUEST_TIMEOUT_MS=' + ASR_REQUEST_TIMEOUT_MS + ',ASR_MODEL=' + JSON.stringify(ASR_MODEL) + ';\n'
+      + "const CONTAINER_BOXES = new Set(['moov','trak','mdia','minf','stbl','moof','traf','mvex','edts']);\n"
+      + 'let gmRangeUsable = false; // about:blank 无 GM 特权，网络请求全部走页面 fetch\n'
+      + serialized + '\n'
+      + WORKER_DRIVER
+      + '</script></body></html>';
+  }
+
+  function collectCheckpoints(videoKey, selHash) {
+    const out = {};
+    if (typeof GM_listValues !== 'function') return out;
+    const prefix = CHECKPOINT_PREFIX + videoKey + '|' + selHash + '|';
+    for (const k of GM_listValues()) {
+      if (!k.startsWith(prefix)) continue;
+      const v = readCheckpoint(k);
+      if (v == null) continue;
+      const tail = k.slice(prefix.length);
+      const sep = tail.lastIndexOf('|');
+      if (sep > 0) out[tail.slice(0, sep) + ':' + tail.slice(sep + 1)] = v;
+    }
+    return out;
   }
 
   function runAsrWithWorker(video, track, selection, ui) {
@@ -1239,61 +1310,58 @@
       let settled = false;
       let lastBeat = Date.now();
       let beatTimer = null;
+      const videoKey = videoCacheKey(video);
+      const selHash = selectionHash(selection);
       const clean = () => {
         settled = true;
         window.removeEventListener('message', onMessage);
-        window.removeEventListener('message', onReady);
-        clearTimeout(readyTimer);
         if (beatTimer) clearInterval(beatTimer);
-        try { worker && worker.close(); } catch (_) { /* ignore */ }
+        try { if (worker) worker.close(); } catch (_) { /* ignore */ }
       };
       const onMessage = event => {
         const d = event.data;
         if (!d || d.type !== 'asr-progress') return;
         lastBeat = Date.now();
         if (d.stage === 'progress') ui.progress(d.text || '识别中', typeof d.fraction === 'number' ? d.fraction : null, d.detail || '');
+        else if (d.stage === 'chunkDone') writeCheckpoint(checkpointKey(videoKey, selHash, d.ri, d.idx), d.text);
         else if (d.stage === 'done') { clean(); resolve({ text: d.text, chunkCount: d.chunkCount }); }
         else if (d.stage === 'error') { clean(); reject(new Error(d.message)); }
       };
-      const onReady = event => {
-        if (!event.data || event.data.type !== 'asr-worker-ready') return;
-        clearTimeout(readyTimer);
-        window.removeEventListener('message', onReady);
-        try {
-          worker.postMessage({
-            type: 'asr-job',
-            jobId: Date.now(),
-            track,
-            selection,
-            videoKey: videoCacheKey(video),
-            cid: video.cid,
-            bvid: video.bvid,
-            aid: video.aid,
-          }, '*');
-        } catch (error) { clean(); reject(error); }
-      };
-      const readyTimer = setTimeout(() => {
-        if (!settled) { clean(); reject(new Error('工作标签页未就绪')); }
-      }, 10000);
       // 心跳：超过 12 秒没有消息就提示仍在工作，避免“准备中”假死观感
       beatTimer = setInterval(() => {
         if (settled) return;
-        if (Date.now() - lastBeat > 12000) {
-          ui.progress('仍在识别中，请稍候…', null, '后台标签页可查看实时状态');
-        }
+        if (Date.now() - lastBeat > 12000) ui.progress('仍在识别中，请稍候…', null, '后台标签页可查看实时状态');
       }, 6000);
-
       try {
-        worker = window.open(WORKER_TAB_URL, WORKER_TAB_NAME);
+        worker = window.open('about:blank', WORKER_TAB_NAME);
       } catch (_) { worker = null; }
       if (!worker) { clean(); reject(new Error('无法打开工作标签页')); return; }
       window.addEventListener('message', onMessage);
-      window.addEventListener('message', onReady);
-      try { worker.postMessage({ type: 'asr-ping' }, '*'); } catch (_) { /* ignore */ }
+      try {
+        worker.document.open();
+        worker.document.write(buildWorkerScript());
+        worker.document.close();
+        setTimeout(() => {
+          if (settled) return;
+          try {
+            worker.postMessage({
+              type: 'asr-job',
+              track,
+              selection,
+              videoKey,
+              selHash,
+              apiKey: getAsrApiKey(),
+              endpoint: getAsrEndpoint(),
+              language: getAsrLanguage(),
+              checkpoints: collectCheckpoints(videoKey, selHash),
+            }, '*');
+          } catch (error) { clean(); reject(error); }
+        }, 50);
+      } catch (error) { clean(); reject(error); }
     });
   }
 
-  // ===== Fork：工作标签页  // ===== 无字幕视频的语音识别兜底 =====
+  // ===== 无字幕视频的语音识别兜底 =====
 
   function getAsrApiKey() {
     return String(GM_getValue(ASR_API_KEY_SETTING, DEFAULT_ASR_API_KEY) || '').trim();
@@ -2017,10 +2085,21 @@
     const best = audioList
       .slice()
       .sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0];
-    const url = (best.baseUrl || best.base_url || '').replace('http:', 'https:');
-    const backups = (best.backupUrl || best.backup_url || [])
+    let url = (best.baseUrl || best.base_url || '').replace('http:', 'https:');
+    let backups = (best.backupUrl || best.backup_url || [])
       .filter(Boolean)
       .map(item => item.replace('http:', 'https:'));
+    // 优先常规 CDN（*.bilivideo.com）：mcdn/pcdn 节点常带非常规端口与 .cn 域，
+    // 既不在油猴 @connect 白名单内，页面 fetch 也易被跨域拦截
+    const isStdCdn = u => /\.bilivideo\.com([/:]|$)/.test(u);
+    if (url && !isStdCdn(url)) {
+      const stdBackup = backups.find(isStdCdn);
+      if (stdBackup) {
+        const old = url;
+        url = stdBackup;
+        backups = [old, ...backups.filter(b => b !== stdBackup)];
+      }
+    }
     if (!url) throw new Error('音频流地址为空');
     return {
       url,
@@ -2283,7 +2362,7 @@
       }, () => fetchAudioTrack(video));
       const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
       const fallbackHash = 'full-dl';
-      const texts = await mapWithBudget(async function* iterateChunks() { for (const c of chunks) yield c; },
+      const texts = await mapWithBudget((async function* iterateChunks() { for (const c of chunks) yield c; })(),
         async (chunk, idx) => {
           const ck = checkpointKey(videoKey, fallbackHash, 0, idx);
           const cached = readCheckpoint(ck);
@@ -2327,12 +2406,16 @@
     }
 
     stage('正在下载音频', null, '');
+    const totalRangeBytes = ranges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0) || 1;
+    let doneRangeBytes = 0;
     const results = [];
     let chunkCount = 0;
     for (let ri = 0; ri < ranges.length; ri++) {
       const range = ranges[ri];
+      const rangeBytes = Math.max(1, range.end - range.start);
       const stream = streamRangeChunks(track.url, headerInfo, range, MAX_AUDIO_CHUNK_BYTES,
-        hooks.onDownloadProgress, hooks.refreshTrack);
+        f => { if (hooks.onDownloadProgress) hooks.onDownloadProgress(Math.min(1, (doneRangeBytes + f * rangeBytes) / totalRangeBytes)); },
+        hooks.refreshTrack);
       const texts = await mapWithBudget(stream, async (chunk, idx) => {
         const ck = checkpointKey(videoKey, selHash, ri, idx);
         const cached = readCheckpoint(ck);
@@ -2342,6 +2425,7 @@
         return text;
       }, ASR_INFLIGHT_BUDGET);
       chunkCount += texts.length;
+      doneRangeBytes += rangeBytes;
       results.push({ title: range.title, text: texts.filter(t => typeof t === 'string').join('') });
       if (hooks.onRangeDone) hooks.onRangeDone(ri + 1, ranges.length);
     }
@@ -2968,10 +3052,7 @@
     document.body.appendChild(controls);
   }
 
-  if (isWorkerTab()) {
-    // Fork：工作标签页只接识别任务，不挂任何 UI
-    attachAsrWorker();
-  } else {
+  {
     GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
     GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
     GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
