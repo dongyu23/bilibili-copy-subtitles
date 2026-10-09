@@ -1185,11 +1185,12 @@
   // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
   // 工作标签页驱动器（注入到 about:blank 中执行，无 CSP、无第三方脚本、不可能被跳转）
   const WORKER_DRIVER = `
-    let __endpoint = '', __language = '';
+    let __endpoint = '', __language = '', __lastJob = '';
     function getAsrEndpoint() { return __endpoint; }
     function getAsrLanguage() { return __language; }
     function setStatus(t) { const el = document.getElementById('asr-worker-status'); if (el) el.textContent = String(t || ''); }
     function post(m) { try { (window.opener || window.parent).postMessage(Object.assign({ type: 'asr-progress' }, m), '*'); } catch (e) { /* ignore */ } }
+    function emit(m) { try { document.getElementById('asr-result-slot').textContent = JSON.stringify(m); } catch (e) { /* ignore */ } }
     function stage(t, f, d) { setStatus(t); post({ stage: 'progress', text: t, fraction: (typeof f === 'number') ? f : null, detail: d || '' }); }
 
     async function runJob(data) {
@@ -1248,9 +1249,7 @@
       return { text: normalizeSubtitle([{ content: assembled }]), chunkCount };
     }
 
-    window.addEventListener('message', async e => {
-      const d = e.data;
-      if (!d || d.type !== 'asr-job') return;
+    async function handleJob(d) {
       __endpoint = d.endpoint;
       __language = d.language;
       setStatus('已接收任务');
@@ -1258,11 +1257,39 @@
         const r = await runJob(d);
         setStatus('识别完成，正在回传结果…');
         post({ stage: 'done', text: r.text, chunkCount: r.chunkCount });
+        emit({ stage: 'done', text: r.text, chunkCount: r.chunkCount });
       } catch (err) {
         setStatus('识别失败：' + ((err && err.message) || err));
         post({ stage: 'error', message: String((err && err.message) || err) });
+        emit({ stage: 'error', message: String((err && err.message) || err) });
       }
+    }
+
+    // DOM 通道槽位：启动旗（供视频页确认脚本已运行）+ 任务槽 + 结果槽
+    const __slots = {};
+    for (const __id of ['asr-boot-flag', 'asr-job-slot', 'asr-result-slot']) {
+      const el = document.createElement('div');
+      el.id = __id;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      __slots[__id] = el;
+    }
+    window.addEventListener('message', e => {
+      const d = e.data;
+      if (!d || d.type !== 'asr-job') return;
+      const raw = JSON.stringify(d);
+      if (__lastJob === raw) return;
+      __lastJob = raw;
+      handleJob(d);
     });
+    setInterval(() => {
+      const raw = __slots['asr-job-slot'].textContent;
+      if (raw && raw !== __lastJob) {
+        __lastJob = raw;
+        try { handleJob(JSON.parse(raw)); } catch (err) { /* 忽略坏数据 */ }
+      }
+    }, 300);
+    post({ stage: 'boot' });
   `;
 
   function buildWorkerScript() {
@@ -1308,56 +1335,116 @@
     return new Promise((resolve, reject) => {
       let worker = null;
       let settled = false;
+      let booted = false;
+      let jobSent = false;
       let lastBeat = Date.now();
-      let beatTimer = null;
+      const timers = [];
+      let bootTimeout = null;
       const videoKey = videoCacheKey(video);
       const selHash = selectionHash(selection);
       const clean = () => {
+        if (settled) return;
         settled = true;
         window.removeEventListener('message', onMessage);
-        if (beatTimer) clearInterval(beatTimer);
+        for (const t of timers) clearInterval(t);
+        if (bootTimeout) clearTimeout(bootTimeout);
         try { if (worker) worker.close(); } catch (_) { /* ignore */ }
+      };
+      const finishOk = payload => { clean(); resolve({ text: payload.text, chunkCount: payload.chunkCount }); };
+      const finishErr = message => { clean(); reject(new Error(message)); };
+      const readWorkerEl = id => {
+        try {
+          const doc = worker && worker.document;
+          return doc ? doc.getElementById(id) : null;
+        } catch (_) { return null; }
+      };
+      const deliverJob = () => {
+        if (jobSent || settled) return;
+        jobSent = true;
+        const payload = {
+          type: 'asr-job',
+          track,
+          selection,
+          videoKey,
+          selHash,
+          apiKey: getAsrApiKey(),
+          endpoint: getAsrEndpoint(),
+          language: getAsrLanguage(),
+          checkpoints: collectCheckpoints(videoKey, selHash),
+        };
+        // 双通道下发：postMessage + DOM 任务槽（同源直达，消息被拦时兜底）
+        try { worker.postMessage(payload, '*'); } catch (_) { /* 走 DOM 通道 */ }
+        const slot = readWorkerEl('asr-job-slot');
+        if (slot) {
+          try { slot.textContent = JSON.stringify(payload); } catch (_) { /* ignore */ }
+        }
+        ui.progress('任务已下发，等待识别进度…', null, '');
+      };
+      const settleFromDomResult = raw => {
+        let payload;
+        try { payload = JSON.parse(raw); } catch (_) { return; }
+        if (payload.stage === 'done') finishOk(payload);
+        else if (payload.stage === 'error') finishErr(payload.message || '后台识别失败');
       };
       const onMessage = event => {
         const d = event.data;
         if (!d || d.type !== 'asr-progress') return;
         lastBeat = Date.now();
+        if (d.stage === 'boot') { deliverJob(); return; }
         if (d.stage === 'progress') ui.progress(d.text || '识别中', typeof d.fraction === 'number' ? d.fraction : null, d.detail || '');
         else if (d.stage === 'chunkDone') writeCheckpoint(checkpointKey(videoKey, selHash, d.ri, d.idx), d.text);
-        else if (d.stage === 'done') { clean(); resolve({ text: d.text, chunkCount: d.chunkCount }); }
-        else if (d.stage === 'error') { clean(); reject(new Error(d.message)); }
+        else if (d.stage === 'done') finishOk(d);
+        else if (d.stage === 'error') finishErr(d.message);
       };
-      // 心跳：超过 12 秒没有消息就提示仍在工作，避免“准备中”假死观感
-      beatTimer = setInterval(() => {
+      // 心跳：超过 12 秒没有消息就提示仍在工作
+      timers.push(setInterval(() => {
         if (settled) return;
         if (Date.now() - lastBeat > 12000) ui.progress('仍在识别中，请稍候…', null, '后台标签页可查看实时状态');
-      }, 6000);
+      }, 6000));
+      ui.progress('正在启动后台识别标签页…', null, '');
       try {
         worker = window.open('about:blank', WORKER_TAB_NAME);
       } catch (_) { worker = null; }
       if (!worker) { clean(); reject(new Error('无法打开工作标签页')); return; }
       window.addEventListener('message', onMessage);
-      try {
+      // 轮询工作页 DOM：启动旗 -> 下发任务；结果槽 -> 收结果（不依赖 postMessage）
+      timers.push(setInterval(() => {
+        if (settled) return;
+        if (!booted) {
+          if (readWorkerEl('asr-boot-flag')) {
+            booted = true;
+            ui.progress('后台标签页已就绪', null, '');
+            deliverJob();
+          }
+          return;
+        }
+        const result = readWorkerEl('asr-result-slot');
+        if (result && result.textContent) settleFromDomResult(result.textContent);
+      }, 400));
+      // 标签页被手动关闭时及时回退，避免任务悬死
+      timers.push(setInterval(() => {
+        if (settled) return;
+        let closed = false;
+        try { closed = !worker || worker.closed; } catch (_) { closed = true; }
+        if (closed) finishErr('后台标签页被关闭');
+      }, 2000));
+      // 6 秒内未见启动旗/启动消息：视为注入失败，关标签页回退本页识别
+      bootTimeout = setTimeout(() => {
+        if (settled) return;
+        if (!booted) finishErr('后台标签页初始化失败');
+      }, 6000);
+      const injectWorker = () => {
         worker.document.open();
         worker.document.write(buildWorkerScript());
         worker.document.close();
+      };
+      try {
+        injectWorker();
+      } catch (_) {
         setTimeout(() => {
-          if (settled) return;
-          try {
-            worker.postMessage({
-              type: 'asr-job',
-              track,
-              selection,
-              videoKey,
-              selHash,
-              apiKey: getAsrApiKey(),
-              endpoint: getAsrEndpoint(),
-              language: getAsrLanguage(),
-              checkpoints: collectCheckpoints(videoKey, selHash),
-            }, '*');
-          } catch (error) { clean(); reject(error); }
-        }, 50);
-      } catch (error) { clean(); reject(error); }
+          try { injectWorker(); } catch (e2) { finishErr('后台标签页注入失败'); }
+        }, 300);
+      }
     });
   }
 
