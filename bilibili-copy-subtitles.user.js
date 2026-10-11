@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.0.1
+// @version      2.0.2
 // @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
@@ -2346,6 +2346,12 @@
       throw new Error('元宝解析响应异常');
     }
     if (json.code !== 0 || !json.data || !json.data.playable_url) {
+      // 元宝对「认得但取不到流」的内容（仅 App 内可看、图集等）会返回 code=0/msg=success，
+      // 把 msg 当错误抛出只会显示一句 "success"，必须换成可操作的说明。
+      if (json.code === 0 || json.msg === 'success') {
+        debugLog('元宝解析未返回视频', json);
+        throw new Error('元宝未从该链接解析出可播放的视频（内容可能仅限微信 App 内观看，或为图集/图文作品；请换一个普通视频链接重试）');
+      }
       throw new Error(json.msg || (json.error && json.error.message)
         || '元宝解析失败（链接可能不受支持或 Cookie 已过期，请更新 Cookie 后重试）');
     }
@@ -2395,6 +2401,47 @@
       throw new Error(`${detail.title || '视频不可用'}${detail.content ? `：${detail.content}` : ''}`);
     }
     return feed;
+  }
+
+  // 匿名探测链接内容状态：finder 接口对 shortUri 的匿名请求不返回视频流，
+  // 但会返回 errMsg.type：4 = 仅可在微信 App 内观看（GeneralErrType_Redirect_App，
+  // 直播/回放或受限内容），2 = 暂时无法播放。这类内容元宝同样解析不出视频流，
+  // 提前给出明确原因，避免跑到最后只看到一句 "success"。
+  // 探测失败（网络/限流/非短链格式）时返回 null，不影响后续元宝解析流程。
+  async function wxProbeContentType(shareUrl) {
+    const shortUri = wxCacheKey(shareUrl);
+    if (!/^[A-Za-z0-9_-]{6,}$/.test(shortUri)) return null;
+    const rid = `${Math.floor(Date.now() / 1000).toString(16)}-${Math.random().toString(16).slice(2, 10)}`;
+    const sphPage = `https://channels.weixin.qq.com/finder-preview/pages/sph?id=${shortUri}`;
+    try {
+      const response = await gmRequest(
+        `${WXCHANNELS_FEED_API}?_rid=${rid}&_pageUrl=${encodeURIComponent(sphPage)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/plain, */*',
+            'sec-ch-ua': '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+            Referer: sphPage,
+          },
+          data: JSON.stringify({ baseReq: { generalToken: '' }, shortUri }),
+          timeout: 20000,
+        }
+      );
+      const json = JSON.parse(response.responseText);
+      const detail = json.data && json.data.errMsg;
+      const type = detail && Number(detail.type);
+      debugLog('链接内容探测', { shortUri, type, title: detail && detail.title });
+      return Number.isFinite(type) ? type : null;
+    } catch (error) {
+      debugLog('链接内容探测失败（不影响主流程）', error && error.message);
+      return null;
+    }
   }
 
   async function wxDownloadVideo(videoUrl, onProgress) {
@@ -2576,6 +2623,21 @@
       if (statusEl) statusEl.textContent = text;
       debugLog(text);
     };
+
+    // 先匿名探测内容状态：仅 App 内可看（type 4）或已失效（type 2）的内容，
+    // 元宝也解析不出视频流，提前给出明确原因而不是跑到最后显示 "success"。
+    setStatus('正在检查链接内容…');
+    const contentType = await wxProbeContentType(shareUrl);
+    if (contentType === 4) {
+      setStatus('失败：该内容仅支持在微信 App 内观看（如直播/回放或受限内容），无法转文字');
+      showToast('该内容仅支持在微信 App 内观看，无法转文字');
+      return;
+    }
+    if (contentType === 2) {
+      setStatus('失败：该内容暂时无法播放（可能已删除或受限），无法转文字');
+      showToast('该内容暂时无法播放，无法转文字');
+      return;
+    }
 
     const cacheKey = `wxchannels:${wxCacheKey(shareUrl)}`;
     const cached = readCache(BODY_CACHE_PREFIX, cacheKey);
