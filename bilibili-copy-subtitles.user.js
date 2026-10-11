@@ -2454,6 +2454,9 @@
       timeout: 300000,
       onprogress: onProgress,
     });
+    // 加密视频的下载响应带 X-enclen 头（加密字节数），记录以便判断解密可行性。
+    const enclen = /x-enclen:\s*(\d+)/i.exec(response.responseHeaders || '');
+    if (enclen) debugLog('下载响应 X-enclen', enclen[1]);
     return new Uint8Array(response.response);
   }
 
@@ -2664,6 +2667,12 @@
         || (feed.h264VideoInfo || {}).videoUrl
         || (feed.h265VideoInfo || {}).videoUrl;
       if (!videoUrl) throw new Error('未获取到视频地址（视频可能已删除或仅作者可见）');
+      // 网页链路是否携带解密密钥（decodeKey）决定了能否支持加密视频，这里把字段名打出来便于确认。
+      debugLog('视频信息字段', {
+        feedKeys: Object.keys(feed),
+        h264Keys: feed.h264VideoInfo ? Object.keys(feed.h264VideoInfo) : null,
+        h265Keys: feed.h265VideoInfo ? Object.keys(feed.h265VideoInfo) : null,
+      });
       debugLog('视频直链', videoUrl.slice(0, 140));
 
       setStatus('正在下载视频…');
