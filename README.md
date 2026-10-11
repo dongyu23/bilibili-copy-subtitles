@@ -1,7 +1,7 @@
 # Bilibili / YouTube / 视频号 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.0.0-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.0.1-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube** 和 **微信视频号**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字。
@@ -57,6 +57,7 @@ YouTube 链路通过 YouTube 官方的 InnerTube 播放器接口读取字幕轨�
 - 无字幕视频可回退到 StepFun 语音识别，生成纯文字内容（B站 / YouTube 均支持）
 - 视频号转文字：粘贴分享链接即自动完成「解析 → 下载 → 语音识别 → 剪贴板」
 - 语音识别 Key 图形化配置面板，支持一键测试连接
+- 元宝 Cookie 支持一键读取与登录态测试，解析/取直链失败时给出可操作的错误原因
 - 设置面板集中管理：Key、识别端点、识别语言、调试开关、元宝 Cookie、缓存留存时间
 - 识别过程可视化：阶段、进度条、实时耗时
 - 识别耗时统计：开始前预估、完成后展示实际用时
@@ -152,6 +153,22 @@ B 站会复用播放器当前页面已经发出的带签名字幕请求，避免
 - 已加密的视频号视频暂不支持（脚本会明确提示），未加密的常规视频可直接转换。
 - StepFun 单次请求上限约 30 分钟音频；更长的视频需要分段处理。
 - 转写结果按视频缓存，重复点击同一链接不会重复计费。
+
+### 视频号转文字排障
+
+转写失败时，面板状态行和提示 toast 会给出具体原因，按提示对应处理即可：
+
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| 元宝 Cookie 已失效或未登录 | 元宝登录态过期（Cookie 有有效期，通常数天） | 设置面板点「打开元宝」重新扫码登录，再点「一键读取 Cookie」，可用「测试 Cookie」验证 |
+| 元宝解析失败（附接口原文） | 链接不被元宝支持（如非视频链接、已删除） | 确认粘贴的是单个视频的分享链接（`weixin.qq.com/sph/…`） |
+| 获取视频信息失败：permission verification failed | 解析出的 token/eid 已过期 | 重新复制分享链接再转一次 |
+| 未获取到视频地址 | 视频已删除或仅作者可见 | 换一个公开视频 |
+| 该视频已加密 | 视频号对该视频做了加密 | 暂不支持，换普通视频 |
+| 语音识别接口返回 HTTP 401/403 | StepFun Key 无效或欠费 | 设置面板重新填写 Key，点「测试连接」验证 |
+| 下载视频时 HTTP 403 | 网络代理干扰了 finder CDN | 检查代理规则，确认 `channels.weixin.qq.com`、`finder.video.qq.com` 直连或稳定节点 |
+
+排查任一环节前，建议先在设置面板打开「调试」开关，控制台会输出解析、直链下载、识别各阶段的详细日志。
 
 ## 支持的页面
 

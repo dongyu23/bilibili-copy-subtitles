@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.0.0
+// @version      2.0.1
 // @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
@@ -178,6 +178,32 @@
     const cookieString = useful.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
     debugLog('自动读取元宝 Cookie', { total: (cookies || []).length, useful: useful.length });
     return { cookieString, total: (cookies || []).length, useful: useful.length };
+  }
+
+  // 用占位链接调用解析接口验证登录态：401/403 即 Cookie 失效，能拿到 JSON 响应即登录态有效
+  // （占位链接本身解析失败不影响判断，此处只关心请求是否被认证接受）。
+  async function testYuanbaoCookie(cookie) {
+    if (!cookie) return '尚未填写元宝 Cookie';
+    if (typeof GM_xmlhttpRequest !== 'function') return '当前脚本管理器不支持 GM_xmlhttpRequest，无法测试';
+    try {
+      await gmRequest(YUANBAO_PARSE_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
+          Referer: YUANBAO_HOME,
+          cookie,
+        },
+        data: JSON.stringify({ type: 'video_channel_url', url: 'https://example.com/', scene: 1 }),
+        timeout: 15000,
+      });
+      return 'Cookie 有效（元宝登录态正常）';
+    } catch (error) {
+      if (error && (error.status === 401 || error.status === 403)) {
+        return 'Cookie 已失效，请重新登录元宝后「一键读取 Cookie」';
+      }
+      return `测试失败：${error.message || error}`;
+    }
   }
 
   function rememberPlayerApiUrl(value) {
@@ -1287,9 +1313,16 @@
     const clearCookieButton = document.createElement('button');
     clearCookieButton.textContent = '清空 Cookie';
     clearCookieButton.className = 'ghost';
+    const testCookieButton = document.createElement('button');
+    testCookieButton.textContent = '测试 Cookie';
+    testCookieButton.className = 'ghost';
     wxRow.appendChild(openYuanbaoButton);
     wxRow.appendChild(readCookieButton);
+    wxRow.appendChild(testCookieButton);
     wxRow.appendChild(clearCookieButton);
+    const cookieTestResult = document.createElement('div');
+    cookieTestResult.className = 'panel-test';
+    cookieTestResult.textContent = '';
     const wxHint = document.createElement('div');
     wxHint.className = 'panel-hint';
     wxHint.textContent = '获取方式：先在元宝登录（点「打开元宝」扫码），再点「一键读取 Cookie」自动填入并保存（自动过滤统计类字段）；若自动读取不可用，再按 F12 → Application/应用 → Cookies → yuanbao.tencent.com 全选复制（需包含 HttpOnly 项）。视频号分享链接经元宝接口解析出视频直链，Cookie 过期后需重新获取。';
@@ -1355,6 +1388,7 @@
     panel.appendChild(wxLabel);
     panel.appendChild(cookieInput);
     panel.appendChild(wxRow);
+    panel.appendChild(cookieTestResult);
     panel.appendChild(wxHint);
     panel.appendChild(debugLabel);
     panel.appendChild(debugLine);
@@ -1429,7 +1463,24 @@
     clearCookieButton.addEventListener('click', () => {
       cookieInput.value = '';
       GM_setValue(YUANBAO_COOKIE_SETTING, '');
+      cookieTestResult.textContent = '';
       showToast('已清空元宝 Cookie');
+    });
+    testCookieButton.addEventListener('click', async () => {
+      const cookie = cookieInput.value.trim() || getYuanbaoCookie();
+      testCookieButton.disabled = true;
+      testCookieButton.textContent = '测试中…';
+      cookieTestResult.textContent = '正在测试元宝登录态…';
+      cookieTestResult.style.color = '#9499a0';
+      try {
+        const message = await testYuanbaoCookie(cookie);
+        cookieTestResult.textContent = message;
+        cookieTestResult.style.color = /有效/.test(message) ? '#00b42a' : '#f53f3f';
+        showToast(message);
+      } finally {
+        testCookieButton.disabled = false;
+        testCookieButton.textContent = '测试 Cookie';
+      }
     });
     debugBox.addEventListener('change', () => {
       GM_setValue(DEBUG_SETTING, debugBox.checked === true);
@@ -2232,11 +2283,18 @@
         onprogress: options.onprogress,
         onload: response => {
           if (response.status >= 200 && response.status < 300) resolve(response);
-          else reject(new Error(`HTTP ${response.status}`));
+          else {
+            // 带上状态码，调用方才能区分「未登录」与普通失败。
+            const error = new Error(`HTTP ${response.status}`);
+            error.status = response.status;
+            reject(error);
+          }
         },
-        onerror: response => reject(
-          new Error(response?.status ? `HTTP ${response.status}` : '网络请求失败')
-        ),
+        onerror: response => {
+          const error = new Error(response?.status ? `HTTP ${response.status}` : '网络请求失败');
+          if (response?.status) error.status = response.status;
+          reject(error);
+        },
         ontimeout: () => reject(new Error('请求超时')),
       });
     });
@@ -2264,21 +2322,32 @@
     if (!cookie) {
       throw new Error('尚未设置元宝 Cookie，请在设置面板填写（点「打开元宝」登录后从开发者工具复制）');
     }
-    const response = await gmRequest(YUANBAO_PARSE_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/plain, */*',
-        Referer: YUANBAO_HOME,
-        cookie,
-      },
-      data: JSON.stringify({ type: 'video_channel_url', url: shareUrl, scene: 1 }),
-    });    let json;
+    let response;
+    try {
+      response = await gmRequest(YUANBAO_PARSE_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/plain, */*',
+          Referer: YUANBAO_HOME,
+          cookie,
+        },
+        data: JSON.stringify({ type: 'video_channel_url', url: shareUrl, scene: 1 }),
+      });
+    } catch (error) {
+      // 元宝对无效/过期 Cookie 返回 401/403，此时重试无意义，直接指引重新登录。
+      if (error && (error.status === 401 || error.status === 403)) {
+        throw new Error('元宝 Cookie 已失效或未登录，请在设置面板点「打开元宝」重新登录后「一键读取 Cookie」');
+      }
+      throw error;
+    }
+    let json;
     try { json = JSON.parse(response.responseText); } catch (_) {
       throw new Error('元宝解析响应异常');
     }
     if (json.code !== 0 || !json.data || !json.data.playable_url) {
-      throw new Error(json.msg || '元宝解析失败（Cookie 可能已过期，请更新）');
+      throw new Error(json.msg || (json.error && json.error.message)
+        || '元宝解析失败（链接可能不受支持或 Cookie 已过期，请更新 Cookie 后重试）');
     }
     const playable = new URL(json.data.playable_url);
     const token = playable.searchParams.get('token') || '';
@@ -2314,6 +2383,11 @@
     try { json = JSON.parse(response.responseText); } catch (_) {
       throw new Error('视频信息响应异常');
     }
+    // 接口拒绝时只有 errCode/errMsg（如 token 过期返回 permission verification failed），
+    // 先把真实原因带出来，避免只看到一句「未获取到视频信息」。
+    if (json.errCode !== undefined && Number(json.errCode) !== 0) {
+      throw new Error(`获取视频信息失败：${json.errMsg || '接口拒绝请求'}（分享链接解析出的凭证可能已过期，请重新复制链接再试）`);
+    }
     const feed = json.data && json.data.feedInfo;
     if (!feed) throw new Error('未获取到视频信息');
     const detail = json.data.errMsg;
@@ -2326,6 +2400,9 @@
   async function wxDownloadVideo(videoUrl, onProgress) {
     const response = await gmRequest(videoUrl, {
       method: 'GET',
+      // finder 视频 CDN 校验 Referer；从其他站点页面启动时显式带上视频号来源，
+      // 避免默认 Referer（如 bilibili.com）被 CDN 拒绝。
+      headers: { Referer: 'https://channels.weixin.qq.com/' },
       responseType: 'arraybuffer',
       timeout: 300000,
       onprogress: onProgress,
