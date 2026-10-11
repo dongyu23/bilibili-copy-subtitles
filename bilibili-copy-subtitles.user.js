@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.0.2
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持 Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
+// @version      2.1.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -76,6 +76,10 @@
   // 小于该体积的视频整包按 m4a 送识别；超过则浏览器内解码提取 16k 单声道 WAV 后分片送。
   const WX_MAX_WHOLE_BYTES = 20 * 1024 * 1024;
   const WX_WAV_CHUNK_BYTES = 10 * 1024 * 1024;
+  // 上传转文字：本地文件整体读入内存后再走识别，过大的文件先拦住避免页面崩溃。
+  const UPLOAD_PANEL_ID = 'bili-copy-upload-panel';
+  const UPLOAD_BUTTON_ID = 'bili-copy-upload-button';
+  const UPLOAD_MAX_BYTES = 500 * 1024 * 1024;
 
   function detectSite() {
     const host = location.hostname;
@@ -290,6 +294,20 @@
       transition: background .18s ease, color .18s ease;
     }
     #${WX_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
+    /* 上传入口：与视频号入口同级。 */
+    #${UPLOAD_BUTTON_ID} {
+      width: 100%;
+      min-height: 30px;
+      padding: 5px 7px;
+      border: 1px solid rgba(0, 0, 0, .12);
+      border-radius: 6px;
+      color: #61666d;
+      background: rgba(255, 255, 255, .92);
+      font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      transition: background .18s ease, color .18s ease;
+    }
+    #${UPLOAD_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
     /* 设置入口：刻意弱化的齿轮，平时不显眼；淡底保证暗色主题下也找得到。 */
     #${SETTINGS_BUTTON_ID} {
       width: 28px;
@@ -351,6 +369,59 @@
     #${WX_PANEL_ID} .wx-row button:disabled { cursor: wait; opacity: .6; }
     #${WX_PANEL_ID} .wx-status { min-height: 16px; color: #61666d; font-size: 11px; word-break: break-all; }
     #${WX_PANEL_ID} .wx-result {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 120px;
+      max-height: 260px;
+      padding: 8px;
+      border: 1px solid rgba(0, 0, 0, .12);
+      border-radius: 6px;
+      font: 12px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      resize: vertical;
+      word-break: break-all;
+    }
+    #${UPLOAD_PANEL_ID} {
+      position: fixed;
+      z-index: 100002;
+      left: 8px;
+      bottom: 16px;
+      width: 300px;
+      max-width: calc(100vw - 24px);
+      padding: 12px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .97);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font: 12px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #18191c;
+    }
+    #${UPLOAD_PANEL_ID}[data-hidden="true"] { display: none; }
+    #${UPLOAD_PANEL_ID} .up-title { font-size: 13px; font-weight: 600; }
+    #${UPLOAD_PANEL_ID} .up-file {
+      min-height: 16px;
+      color: #61666d;
+      font-size: 11px;
+      word-break: break-all;
+    }
+    #${UPLOAD_PANEL_ID} .up-row { display: flex; gap: 8px; }
+    #${UPLOAD_PANEL_ID} .up-row button {
+      flex: 1;
+      padding: 6px 0;
+      border: 0;
+      border-radius: 6px;
+      color: #fff;
+      background: #00aeec;
+      cursor: pointer;
+      font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #${UPLOAD_PANEL_ID} .up-row button:hover { background: #009bd3; }
+    #${UPLOAD_PANEL_ID} .up-row button.ghost { background: #e3e5e7; color: #18191c; }
+    #${UPLOAD_PANEL_ID} .up-row button.ghost:hover { background: #d7d9dc; }
+    #${UPLOAD_PANEL_ID} .up-row button:disabled { cursor: wait; opacity: .6; }
+    #${UPLOAD_PANEL_ID} .up-status { min-height: 16px; color: #61666d; font-size: 11px; word-break: break-all; }
+    #${UPLOAD_PANEL_ID} .up-result {
       width: 100%;
       box-sizing: border-box;
       min-height: 120px;
@@ -2572,10 +2643,11 @@
   }
 
   // 小文件整包按 m4a 送；大文件解码提 WAV 后分片送。
-  async function wxTranscribeBytes(bytes, apiKey) {
-    if (bytes.length <= WX_MAX_WHOLE_BYTES) {
+  // wholeFormat 为空字符串时强制走解码路径（上传的非 MP4 容器用，避免猜错格式）。
+  async function wxTranscribeBytes(bytes, apiKey, wholeFormat = 'm4a') {
+    if (wholeFormat && bytes.length <= WX_MAX_WHOLE_BYTES) {
       updateProgress('正在识别', null, formatMB(bytes.length));
-      const text = await transcribeAudioChunk(bytes, apiKey, null, 'm4a');
+      const text = await transcribeAudioChunk(bytes, apiKey, null, wholeFormat);
       return { text, chunkCount: 1 };
     }
     updateProgress('正在提取音频', null, formatMB(bytes.length));
@@ -2780,6 +2852,152 @@
     input.focus();
   }
 
+  // 上传本地音视频转文字：MP4 家族/mp3/wav 按扩展名整包送识别，
+  // 其余容器返回空串强制走浏览器解码分片路径，避免向接口猜错格式。
+  function uploadWholeFormat(file) {
+    const name = String((file && file.name) || '').toLowerCase();
+    if (/\.(mp4|m4v|mov|m4a|m4b|3gp|3gpp|f4v)$/.test(name)) return 'm4a';
+    if (/\.mp3$/.test(name)) return 'mp3';
+    if (/\.wav$/.test(name)) return 'wav';
+    return '';
+  }
+
+  function readFileAsBytes(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(new Uint8Array(reader.result));
+      reader.onerror = () => reject(new Error('文件读取失败'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  async function runUploadTranscribe(file) {
+    if (!file) return;
+    if (file.size > UPLOAD_MAX_BYTES) {
+      showToast(`文件过大（${formatMB(file.size)}），上限 500MB，请先裁剪`);
+      return;
+    }
+    const apiKey = getAsrApiKey();
+    if (!apiKey) {
+      openSettingsPanel();
+      showToast('请先设置 StepFun API Key');
+      return;
+    }
+    if (!asrConsentGiven && !window.confirm(
+      '将通过 StepFun 语音识别把上传文件的语音转成文字，音频会上传至 StepFun（按时长计费），是否继续？'
+    )) return;
+    asrConsentGiven = true;
+
+    const panel = document.getElementById(UPLOAD_PANEL_ID);
+    const statusEl = panel?.querySelector('.up-status');
+    const resultEl = panel?.querySelector('.up-result');
+    const pickEl = panel?.querySelector('.up-pick');
+    const setStatus = text => {
+      if (statusEl) statusEl.textContent = text;
+      debugLog(text);
+    };
+
+    const startedAt = Date.now();
+    if (pickEl) pickEl.disabled = true;
+    showProgressPanel();
+    try {
+      setStatus('正在读取文件…');
+      updateProgress('正在读取文件', null, `${file.name} · ${formatMB(file.size)}`);
+      const bytes = await readFileAsBytes(file);
+      const { text, chunkCount } = await wxTranscribeBytes(bytes, apiKey, uploadWholeFormat(file));
+      if (!text) throw new Error('语音识别结果为空');
+      const elapsedMs = Date.now() - startedAt;
+      pushAsrHistory({ audioSeconds: 0, elapsedMs, chunkCount, at: Date.now() });
+      if (resultEl) resultEl.value = text;
+      setStatus(`完成：${text.length} 字符 · 用时 ${formatElapsed(elapsedMs)}`);
+      await writeClipboard(text);
+      showToast(`已通过语音识别复制，共 ${text.length} 字符 · 用时 ${formatElapsed(elapsedMs)}`);
+    } catch (error) {
+      console.error('[复制字幕][上传转文字]', error);
+      setStatus(`失败：${error.message || error}`);
+      showToast(`上传转文字失败：${error.message || error}`);
+    } finally {
+      hideProgressPanel();
+      if (pickEl) pickEl.disabled = false;
+    }
+  }
+
+  function openUploadPanel() {
+    let panel = document.getElementById(UPLOAD_PANEL_ID);
+    if (panel) {
+      panel.dataset.hidden = 'false';
+      return;
+    }
+    panel = document.createElement('div');
+    panel.id = UPLOAD_PANEL_ID;
+    const title = document.createElement('div');
+    title.className = 'up-title';
+    title.textContent = '上传音视频转文字';
+    const fileLabel = document.createElement('div');
+    fileLabel.className = 'up-file';
+    fileLabel.textContent = '支持常见视频/音频格式；≤20MB 整包识别，更大文件自动解码分片';
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'video/*,audio/*';
+    fileInput.style.display = 'none';
+    const row = document.createElement('div');
+    row.className = 'up-row';
+    const pickButton = document.createElement('button');
+    pickButton.className = 'up-pick';
+    pickButton.textContent = '选择视频/音频文件';
+    const cancelButton = document.createElement('button');
+    cancelButton.className = 'ghost';
+    cancelButton.textContent = '收起';
+    row.appendChild(pickButton);
+    row.appendChild(cancelButton);
+    const status = document.createElement('div');
+    status.className = 'up-status';
+    status.textContent = '需先在设置里配置 StepFun Key（右下角 ⚙）';
+    const result = document.createElement('textarea');
+    result.className = 'up-result';
+    result.placeholder = '转写结果会显示在这里，并自动复制到剪贴板';
+    result.readOnly = true;
+    const resultRow = document.createElement('div');
+    resultRow.className = 'up-row';
+    const copyButton = document.createElement('button');
+    copyButton.textContent = '复制文字';
+    const closeButton = document.createElement('button');
+    closeButton.className = 'ghost';
+    closeButton.textContent = '关闭';
+    resultRow.appendChild(copyButton);
+    resultRow.appendChild(closeButton);
+
+    pickButton.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      fileLabel.textContent = `已选择：${file.name}（${formatMB(file.size)}）`;
+      runUploadTranscribe(file);
+      // 清空 value，允许再次选择同一个文件。
+      fileInput.value = '';
+    });
+    cancelButton.addEventListener('click', () => { panel.dataset.hidden = 'true'; });
+    copyButton.addEventListener('click', async () => {
+      const text = result.value || '';
+      if (!text) {
+        showToast('还没有转写结果');
+        return;
+      }
+      await writeClipboard(text);
+      showToast(`已复制 ${text.length} 个字符`);
+    });
+    closeButton.addEventListener('click', () => panel.remove());
+
+    panel.appendChild(title);
+    panel.appendChild(fileLabel);
+    panel.appendChild(row);
+    panel.appendChild(status);
+    panel.appendChild(result);
+    panel.appendChild(resultRow);
+    panel.appendChild(fileInput);
+    document.body.appendChild(panel);
+  }
+
   async function writeClipboard(text) {
     if (typeof GM_setClipboard === 'function') {
       GM_setClipboard(text, 'text');
@@ -2960,6 +3178,15 @@
     wxButton.dataset.hidden = String(isHidden());
     wxButton.addEventListener('click', openWxchannelsPanel);
     controls.appendChild(wxButton);
+    // 上传入口：选择本地音视频文件，复用 StepFun 语音识别转文字。
+    const uploadButton = document.createElement('button');
+    uploadButton.id = UPLOAD_BUTTON_ID;
+    uploadButton.type = 'button';
+    uploadButton.textContent = '上传转文字';
+    uploadButton.title = '选择本地视频/音频文件，经语音识别转成文字';
+    uploadButton.dataset.hidden = String(isHidden());
+    uploadButton.addEventListener('click', openUploadPanel);
+    controls.appendChild(uploadButton);
     // 设置入口：刻意弱化的齿轮，鼠标悬停才清晰。
     const settingsButton = document.createElement('button');
     settingsButton.id = SETTINGS_BUTTON_ID;
@@ -2975,6 +3202,7 @@
   {
     GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
     GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
+    GM_registerMenuCommand('上传音视频转文字', openUploadPanel);
     GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
     GM_registerMenuCommand('显示/隐藏页面按钮', () => {
       const hidden = !isHidden();
