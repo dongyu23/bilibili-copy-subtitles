@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.1.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程。
+// @version      2.2.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -1064,6 +1064,17 @@
     }
   }
 
+  // 章节读取统一入口：先读缓存，未命中再请求接口；无章节（含非 B 站站点）返回空数组。
+  // 否定结果按空数组缓存——readCache 对 null 一律视为未命中，不缓存会导致每次点击都重新请求。
+  async function loadVideoChapters(video, videoKey) {
+    let chapters = readCache(CHAPTER_CACHE_PREFIX, videoKey);
+    if (chapters === null || chapters === undefined) {
+      chapters = await fetchVideoChapters(video);
+      writeCache(CHAPTER_CACHE_PREFIX, videoKey, Array.isArray(chapters) ? chapters : []);
+    }
+    return Array.isArray(chapters) ? chapters : [];
+  }
+
   function selectionHash(selection) {
     if (!selection || selection.mode === 'full') return 'full';
     return 'ch:' + selection.ranges.map(r => r.id || r.startMs).join(',');
@@ -1078,7 +1089,8 @@
     return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(ss).padStart(2, '0')}`;
   }
 
-  function showChapterPanel(chapters, track) {
+  // options：title/hint/okText 供字幕复制等场景复用同一面板，缺省为语音识别文案。
+  function showChapterPanel(chapters, track, options = {}) {
     return new Promise(resolve => {
       console.log('[复制字幕] 章节数据', chapters);
       const totalMs = (track && track.duration ? track.duration : 0) * 1000;
@@ -1092,7 +1104,8 @@
         .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:#222}
         .panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min(430px,92vw);max-height:80vh;display:flex;flex-direction:column}
         .title{font-size:16px;font-weight:600;padding:14px 16px 4px;color:#222}
-        .hint{font-size:12px;color:#888;padding:0 16px 8px}
+        .hint{font-size:12px;color:#888;padding:0 16px 8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+        .hint button.link{border:none;background:none;color:#00aeec;cursor:pointer;font-size:12px;padding:0;flex:none}
         .list{overflow-y:auto;padding:4px 16px;flex:1}
         .row{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer;color:#222;font-size:14px}
         .row:hover{background:#f2f3f5}
@@ -1110,10 +1123,24 @@
       panel.className = 'panel';
       const title = document.createElement('div');
       title.className = 'title';
-      title.textContent = '选择识别范围';
+      title.textContent = options.title || '选择识别范围';
       const hint = document.createElement('div');
       hint.className = 'hint';
-      hint.textContent = '默认全篇；取消“全篇”后可自由勾选章节，仅识别所选内容。';
+      const hintText = document.createElement('span');
+      hintText.textContent = options.hint || '默认全篇；取消“全篇”后可自由勾选章节，仅识别所选内容。';
+      hint.appendChild(hintText);
+      // 全选/清空：章节多的视频一键勾选或取消，避免逐个点击。
+      const toggleAllBtn = document.createElement('button');
+      toggleAllBtn.type = 'button';
+      toggleAllBtn.className = 'link';
+      toggleAllBtn.textContent = '全选/清空';
+      toggleAllBtn.addEventListener('click', () => {
+        const anyUnchecked = boxes.some(b => !b.cb.checked);
+        for (const b of boxes) b.cb.checked = anyUnchecked;
+        fullCb.checked = !anyUnchecked;
+        syncMode();
+      });
+      hint.appendChild(toggleAllBtn);
       const list = document.createElement('div');
       list.className = 'list';
 
@@ -1123,7 +1150,7 @@
       fullCb.type = 'checkbox';
       fullCb.checked = true;
       const fullText = document.createElement('span');
-      fullText.textContent = `全篇（${fmtClock(totalMs)}）`;
+      fullText.textContent = totalMs ? `全篇（${fmtClock(totalMs)}）` : '全篇（不分章）';
       fullRow.appendChild(fullCb);
       fullRow.appendChild(fullText);
       list.appendChild(fullRow);
@@ -1167,7 +1194,7 @@
       cancelBtn.textContent = '取消';
       const okBtn = document.createElement('button');
       okBtn.type = 'button';
-      okBtn.textContent = '开始识别';
+      okBtn.textContent = options.okText || '开始识别';
       okBtn.className = 'ok';
       actions.appendChild(cancelBtn);
       actions.appendChild(okBtn);
@@ -1881,12 +1908,7 @@
     return subtitleData.body;
   }
 
-  function normalizeSubtitle(body) {
-    const lines = (Array.isArray(body) ? body : [])
-      .map(item => String(item?.content ?? ''))
-      .map(line => line.replace(/\\N/gi, '\n').replace(/\r/g, '').trim())
-      .filter(Boolean);
-
+  function joinSubtitleLines(lines) {
     let text = '';
     for (const line of lines) {
       if (!text) {
@@ -1900,6 +1922,50 @@
       .replace(/[ \t]*\n[ \t]*/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
+  }
+
+  function normalizeSubtitle(body) {
+    const lines = (Array.isArray(body) ? body : [])
+      .map(item => String(item?.content ?? ''))
+      .map(line => line.replace(/\\N/gi, '\n').replace(/\r/g, '').trim())
+      .filter(Boolean);
+    return joinSubtitleLines(lines);
+  }
+
+  // 按章节拆分字幕：先用完整章节表把每条字幕归到“起始时间不晚于它的最后一个章节”
+  // （章前/章后的残余内容并入首/末章，全选时不丢文字），再只输出所选章节。
+  // 输出格式与语音识别章节模式一致：【章节名】单独成行，章节间空行分隔。
+  function buildChapterSubtitleText(body, chapters, pickedChapters) {
+    const items = (Array.isArray(body) ? body : [])
+      .map(item => ({
+        fromMs: Number(item?.from) * 1000,
+        line: String(item?.content ?? '').replace(/\\N/gi, '\n').replace(/\r/g, '').trim(),
+      }))
+      .filter(item => Number.isFinite(item.fromMs) && item.line)
+      .sort((a, b) => a.fromMs - b.fromMs);
+    const ordered = (Array.isArray(chapters) ? chapters : [])
+      .slice()
+      .sort((a, b) => a.startMs - b.startMs);
+    const picked = (Array.isArray(pickedChapters) ? pickedChapters : [])
+      .slice()
+      .sort((a, b) => a.startMs - b.startMs);
+    if (!items.length || !ordered.length || !picked.length) return '';
+    const buckets = new Map(picked.map(ch => [ch.id, []]));
+    for (const item of items) {
+      let owner = ordered[0];
+      for (const ch of ordered) {
+        if (ch.startMs <= item.fromMs) owner = ch;
+        else break;
+      }
+      const bucket = buckets.get(owner.id);
+      if (bucket) bucket.push(item.line);
+    }
+    const sections = [];
+    for (const ch of picked) {
+      const text = joinSubtitleLines(buckets.get(ch.id) || []);
+      if (text) sections.push(`【${ch.title}】\n${text}`);
+    }
+    return sections.join('\n');
   }
 
   // ===== 音频获取 =====
@@ -3043,11 +3109,7 @@
         // 先取音频信息（不含下载），用于展示时长与预估耗时。
         const track = await fetchAudioTrack(video);
         // Fork：章节选择（无章节则保持原行为）
-        let chapters = readCache(CHAPTER_CACHE_PREFIX, videoKey);
-        if (chapters === null || chapters === undefined) {
-          chapters = await fetchVideoChapters(video);
-          writeCache(CHAPTER_CACHE_PREFIX, videoKey, chapters);
-        }
+        const chapters = await loadVideoChapters(video, videoKey);
         let selection = { mode: 'full' };
         if (Array.isArray(chapters) && chapters.length) {
           const picked = await showChapterPanel(chapters, track);
@@ -3112,13 +3174,30 @@
       const url = subtitle.subtitle_url.startsWith('//')
         ? `https:${subtitle.subtitle_url}`
         : subtitle.subtitle_url;
+      // 有字幕时也支持按章节复制：B 站视频带章节（≥2 个）时弹面板，默认整篇不分章，行为与之前一致。
+      const chapters = await loadVideoChapters(video, videoKey);
+      let selection = { mode: 'full' };
+      if (chapters.length) {
+        const picked = await showChapterPanel(chapters, null, {
+          title: '选择复制范围',
+          hint: '默认整篇复制；取消“整篇”后可勾选章节，仅复制所选章节的文字（带【章节名】分隔）。',
+          okText: '开始复制',
+        });
+        if (!picked) return; // 用户取消
+        selection = picked;
+      }
+      const selHash = selectionHash(selection);
       // 字幕 CDN 的跨域响应不接受携带 Cookie 的凭据请求。
-      const bodyCacheKey = `${videoCacheKey(video)}:${subtitle.lan || url}`;
-      let text = readCache(BODY_CACHE_PREFIX, bodyCacheKey);
+      const bodyCacheKey = `${videoKey}:${subtitle.lan || url}`;
+      // 章节选择单独占一个缓存键，整篇与各章节组合互不影响。
+      const cacheKey = selHash === 'full' ? bodyCacheKey : `${bodyCacheKey}:${selHash}`;
+      let text = readCache(BODY_CACHE_PREFIX, cacheKey);
       if (!text) {
         const body = await fetchSubtitleBody(video, subtitle);
-        text = normalizeSubtitle(body);
-        if (text) writeCache(BODY_CACHE_PREFIX, bodyCacheKey, text);
+        text = selection.mode === 'full'
+          ? normalizeSubtitle(body)
+          : buildChapterSubtitleText(body, chapters, selection.ranges);
+        if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
       }
       if (videoCacheKey(resolveCurrentVideo()) !== videoKey) {
         throw new Error('检测到页面已切换视频，已停止复制旧字幕');
@@ -3127,7 +3206,9 @@
 
       await writeClipboard(text);
       const language = subtitleLanguageLabel(subtitle);
-      showToast(`已复制${language}，共 ${text.length} 个字符`);
+      showToast(selection.mode === 'full'
+        ? `已复制${language}，共 ${text.length} 个字符`
+        : `已复制${language}（${selection.ranges.length} 个章节），共 ${text.length} 个字符`);
     } catch (error) {
       console.error('[复制字幕]', error);
       showToast(`复制失败：${error.message || error}`);
