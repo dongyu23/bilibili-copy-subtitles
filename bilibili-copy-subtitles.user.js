@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.2.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔。
+// @version      2.2.1
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -626,7 +626,9 @@
         onload(response) {
           try {
             if (response.status < 200 || response.status >= 300) {
-              throw new Error(`油猴请求返回 HTTP ${response.status}`);
+              const error = new Error(`油猴请求返回 HTTP ${response.status}`);
+              error.status = response.status;
+              throw error;
             }
             resolve(JSON.parse(response.responseText));
           } catch (error) {
@@ -650,7 +652,11 @@
         credentials,
         cache: 'no-store',
       });
-      if (!response.ok) throw new Error(`浏览器请求返回 HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`浏览器请求返回 HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       return await response.json();
     } catch (error) {
       fetchError = error;
@@ -662,9 +668,12 @@
       const host = (() => {
         try { return new URL(url, location.href).host; } catch (_) { return '未知地址'; }
       })();
-      throw new Error(
+      const error = new Error(
         `${host} 请求失败：${gmError.message}；浏览器请求：${fetchError?.message || '失败'}`
       );
+      // 透传 HTTP 状态码，调用方才能按 403 等状态走换链重试等分支。
+      error.status = gmError.status || fetchError?.status;
+      throw error;
     }
   }
 
@@ -1796,10 +1805,13 @@
     return mapYouTubeCaptionTracks(playerData);
   }
 
-  async function fetchSubtitleMeta(video) {
+  async function fetchSubtitleMeta(video, options = {}) {
     const cacheKey = videoCacheKey(video);
-    const cached = readCache(META_CACHE_PREFIX, cacheKey);
-    if (cached) return cached;
+    // force：绕过缓存重新拉取，用于直链过期后换新链接（见 fetchSubtitleBodyFresh）。
+    if (!options.force) {
+      const cached = readCache(META_CACHE_PREFIX, cacheKey);
+      if (cached) return cached;
+    }
     let subtitles;
     if (video.site === 'youtube') {
       subtitles = await fetchYouTubeSubtitleMeta(video);
@@ -1906,6 +1918,38 @@
     }
     const subtitleData = await requestJson(subtitle.subtitle_url, { credentials: 'omit' });
     return subtitleData.body;
+  }
+
+  // 字幕直链带 auth_key 有效期：页面开太久或切 P 后直链过期，CDN 会返回 403。
+  // 此时重新拉取字幕列表换取新直链重试；仍失败则给出可操作的中文提示，
+  // 不把原始 HTTP 403 抛给用户（细节打在 console）。
+  async function fetchSubtitleBodyFresh(video, subtitle, selectedLanguage) {
+    const hint = '字幕下载被拒绝：直链可能已过期，或当前网络/代理拦截了字幕 CDN。'
+      + '请刷新页面后重试；使用代理时请放行 *.hdslb.com';
+    try {
+      return await fetchSubtitleBody(video, subtitle);
+    } catch (error) {
+      if (error?.status !== 403) throw error;
+      console.warn('[复制字幕] 字幕直链被拒（HTTP 403），尝试换取新直链', error);
+      let subtitles = [];
+      try {
+        subtitles = await fetchSubtitleMeta(video, { force: true });
+      } catch (metaError) {
+        console.warn('[复制字幕] 刷新字幕列表失败', metaError);
+      }
+      // 优先按原语言选轨，避免刷新后选到另一条字幕。
+      const fresh = (subtitle.lan && subtitles.find(s => s.lan === subtitle.lan))
+        || chooseSubtitle(subtitles, selectedLanguage);
+      if (!fresh?.subtitle_url || fresh.subtitle_url === subtitle.subtitle_url) {
+        throw new Error(hint);
+      }
+      try {
+        return await fetchSubtitleBody(video, fresh);
+      } catch (retryError) {
+        if (retryError?.status !== 403) throw retryError;
+        throw new Error(hint);
+      }
+    }
   }
 
   function joinSubtitleLines(lines) {
@@ -3193,7 +3237,7 @@
       const cacheKey = selHash === 'full' ? bodyCacheKey : `${bodyCacheKey}:${selHash}`;
       let text = readCache(BODY_CACHE_PREFIX, cacheKey);
       if (!text) {
-        const body = await fetchSubtitleBody(video, subtitle);
+        const body = await fetchSubtitleBodyFresh(video, subtitle, selectedLanguage);
         text = selection.mode === 'full'
           ? normalizeSubtitle(body)
           : buildChapterSubtitleText(body, chapters, selection.ranges);
