@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.5.1
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字。
+// @version      2.5.2
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -1959,11 +1959,13 @@
         text = line;
         continue;
       }
-      // 保留基础空格：下一行以字母/数字开头且上一行末尾不是 CJK（汉字/假名/
-      // 谚文/CJK 标点）时补一个空格，避免 "Next," + "Let's" 被粘成 "Next,Let's"；
-      // 两侧都是中文时维持原有直接拼接。
-      const cjkEnd = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af\u3000-\u303f\uff01-\uff60]$/.test(text);
-      const needsSpace = /^[A-Za-z0-9]/.test(line) && !cjkEnd;
+      // 保留基础空格：字幕逐条轮番出现，两条之间就是自然断句点。带标点的
+      // 字幕在标点处已有边界，不再加空格；无标点字幕（如 B 站 AI 字幕）依靠
+      // 这个空格保持句间边界。下一行以标点开头时也不加。
+      const prevEndsPunct = /[。，、；：！？…—,.!?;:”’」』）)]$/.test(text);
+      const lineStartsPunct = /^[。，、；：！？…—,.!?;:“‘「『（(]/.test(line);
+      const lineStartsLatin = /^[A-Za-z0-9]/.test(line);
+      const needsSpace = !lineStartsPunct && (lineStartsLatin || !prevEndsPunct);
       text += needsSpace ? ` ${line}` : line;
     }
     return text
