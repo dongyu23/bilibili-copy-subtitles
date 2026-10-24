@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.2.1
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试。
+// @version      2.3.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -3322,6 +3322,536 @@
     controls.appendChild(settingsButton);
     controls.dataset.hidden = String(isHidden());
     document.body.appendChild(controls);
+  }
+
+  // ===== Fork v2.3：跨集复制（按右侧“视频选集”跨分P复制字幕） =====
+  // 适用按选集（多分P）分段而非按章节分段的视频：在选集面板头部加“跨集复制”入口，
+  // 勾选集数后逐集获取字幕，按 【Pn】【标题】 分段拼接复制。字幕列表逐集走
+  // WBI 签名的 player/wbi/v2 接口（见下）并复用统一缓存；无字幕的集数跳过并在
+  // 结果里说明。
+
+  const EPISODE_BUTTON_ID = 'bili-copy-cross-episodes-button';
+  const EPISODE_PANEL_HOST_ID = 'bili-sub-episode-host';
+  const PAGES_CACHE_PREFIX = 'video-pages-v1:';
+  let episodeCopyCancelled = false;
+
+  // ===== 跨集字幕列表必须走 WBI 签名的 /x/player/wbi/v2 =====
+  // 实测（BV1ADpxz9E9V，登录态）：未签名 /x/player/v2 对多数分P返回的 AI 字幕
+  // 是其他视频的错乱数据，而签名后的 wbi/v2 与播放器自身请求返回完全一致；
+  // 签名按 bilibili-API-collect 公开算法：nav 取 img/sub key → mixin 表换位
+  // → 参数排序拼串 → md5(query + key) 得 w_rid。
+  const WBI_KEY_CACHE_PREFIX = 'video-wbi-key-v1:';
+  const WBI_MIXIN_KEY_ENC_TABLE = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+    61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+    36, 20, 34, 44, 52,
+  ];
+  let wbiKeyMemory = null;
+
+  // RFC 1321 MD5（WBI 签名专用，输入为 ASCII 安全的查询串）。
+  function md5Hex(input) {
+    function toUtf8Bytes(str) {
+      const utf8 = [];
+      for (let i = 0; i < str.length; i++) {
+        let charCode = str.charCodeAt(i);
+        if (charCode < 0x80) utf8.push(charCode);
+        else if (charCode < 0x800) utf8.push(0xc0 | (charCode >> 6), 0x80 | (charCode & 0x3f));
+        else if (charCode < 0xd800 || charCode >= 0xe000) {
+          utf8.push(0xe0 | (charCode >> 12), 0x80 | ((charCode >> 6) & 0x3f), 0x80 | (charCode & 0x3f));
+        } else {
+          charCode = 0x10000 + (((charCode & 0x3ff) << 10) | (str.charCodeAt(++i) & 0x3ff));
+          utf8.push(0xf0 | (charCode >> 18), 0x80 | ((charCode >> 12) & 0x3f), 0x80 | ((charCode >> 6) & 0x3f), 0x80 | (charCode & 0x3f));
+        }
+      }
+      return new Uint8Array(utf8);
+    }
+    function rotl(n, b) { return (n << b) | (n >>> (32 - b)); }
+    const S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+      5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+      4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+      6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+    const K = new Array(64);
+    for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296);
+    const bytes = toUtf8Bytes(input);
+    const origLen = bytes.length;
+    const padded = new Uint8Array((((origLen + 8) >> 6) + 1) * 64);
+    padded.set(bytes);
+    padded[origLen] = 0x80;
+    const bitLen = origLen * 8;
+    const dv = new DataView(padded.buffer);
+    dv.setUint32(padded.length - 8, bitLen >>> 0, true);
+    dv.setUint32(padded.length - 4, Math.floor(bitLen / 4294967296), true);
+    let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+    for (let chunk = 0; chunk < padded.length; chunk += 64) {
+      const M = [];
+      for (let i = 0; i < 16; i++) M.push(dv.getUint32(chunk + i * 4, true));
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let i = 0; i < 64; i++) {
+        let F, g;
+        if (i < 16) { F = (B & C) | (~B & D); g = i; }
+        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16; }
+        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16; }
+        else { F = C ^ (B | ~D); g = (7 * i) % 16; }
+        F = (F + A + K[i] + M[g]) >>> 0;
+        A = D; D = C; C = B;
+        B = (B + rotl(F, S[i])) >>> 0;
+      }
+      a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+    }
+    return [a0, b0, c0, d0].map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+  }
+
+  // nav 接口换 wbi key（官方约定 key 每天轮换，这里内存/会话缓存 1 小时）。
+  async function getWbiKey() {
+    if (wbiKeyMemory && Date.now() - wbiKeyMemory.at < 3600 * 1000) return wbiKeyMemory.key;
+    try {
+      const cached = readCache(WBI_KEY_CACHE_PREFIX, 'key');
+      if (cached && cached.key && Date.now() - Date.parse(cached.at) < 3600 * 1000) {
+        wbiKeyMemory = cached;
+        return cached.key;
+      }
+    } catch (_) { /* 缓存损坏按未命中处理 */ }
+    const result = await requestJson('https://api.bilibili.com/x/web-interface/nav');
+    if (result.code !== 0 && !result.data?.wbi_img) throw new Error(result.message || '无法获取 WBI 签名参数');
+    const img = String(result.data?.wbi_img?.img_url || '').split('/').pop().split('.')[0];
+    const sub = String(result.data?.wbi_img?.sub_url || '').split('/').pop().split('.')[0];
+    const raw = img + sub;
+    let key = '';
+    for (const index of WBI_MIXIN_KEY_ENC_TABLE) {
+      if (raw[index] !== undefined) key += raw[index];
+    }
+    key = key.slice(0, 32);
+    if (!key) throw new Error('WBI 签名参数为空');
+    wbiKeyMemory = { key, at: new Date().toISOString() };
+    writeCache(WBI_KEY_CACHE_PREFIX, 'key', wbiKeyMemory);
+    return key;
+  }
+
+  // 构造带 w_rid 签名的 wbi/v2 请求地址。
+  async function buildWbiPlayerUrl(video) {
+    const key = await getWbiKey();
+    const params = { cid: String(video.cid), wts: String(Math.floor(Date.now() / 1000)) };
+    if (video.bvid) params.bvid = video.bvid;
+    else if (video.aid) params.aid = String(video.aid);
+    const encoded = Object.keys(params).sort()
+      .map(name => `${encodeURIComponent(name)}=${encodeURIComponent(params[name].replace(/[!'()*]/g, ''))}`)
+      .join('&');
+    const wRid = md5Hex(`${encoded}${key}`);
+    return `https://api.bilibili.com/x/player/wbi/v2?${encoded}&w_rid=${wRid}`;
+  }
+
+  // 选集列表：view 接口一次给出全部分P的 cid/标题/时长，登录态不影响该接口。
+  async function fetchVideoPages(bvid) {
+    const cacheKey = `view:${bvid}`;
+    const cached = readCache(PAGES_CACHE_PREFIX, cacheKey);
+    if (cached) return cached;
+    const result = await requestJson(`https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`);
+    if (result.code !== 0) throw new Error(result.message || '无法读取选集信息');
+    const pages = (Array.isArray(result.data?.pages) ? result.data.pages : [])
+      .map(page => ({
+        page: Number(page.page) || 0,
+        cid: Number(page.cid) || 0,
+        part: String(page.part || '').trim(),
+        duration: Number(page.duration) || 0,
+      }))
+      .filter(page => page.cid)
+      .sort((a, b) => a.page - b.page);
+    const value = { aid: Number(result.data?.aid) || 0, title: String(result.data?.title || ''), pages };
+    writeCache(PAGES_CACHE_PREFIX, cacheKey, value);
+    return value;
+  }
+
+  // 跨集字幕列表：走 WBI 签名请求（与播放器同源、数据一致），失败时退回
+  // player/v2 兼容接口；不能走 waitForPlayerSubtitleApiUrl——播放器只为当前
+  // 分P发签名请求，其他分P永远等不到。
+  async function fetchEpisodeSubtitleMeta(video, options = {}) {
+    const cacheKey = videoCacheKey(video);
+    if (!options.force) {
+      const cached = readCache(META_CACHE_PREFIX, cacheKey);
+      if (cached) return cached;
+    }
+    let subtitles = [];
+    try {
+      const result = await requestJson(await buildWbiPlayerUrl(video));
+      if (result.code !== 0) throw new Error(result.message || '无法读取字幕列表');
+      subtitles = Array.isArray(result.data?.subtitle?.subtitles) ? result.data.subtitle.subtitles : [];
+    } catch (error) {
+      console.warn('[复制字幕] 跨集 WBI 请求失败，退回兼容接口', error);
+      subtitles = await fetchLegacySubtitleMeta(video);
+    }
+    if (subtitles.length) writeCache(META_CACHE_PREFIX, cacheKey, subtitles);
+    return subtitles;
+  }
+
+  // 跨集字幕 403 换链：与 fetchSubtitleBodyFresh 同思路，但刷新通道走
+  // fetchEpisodeSubtitleMeta（WBI 优先），不依赖播放器捕获链接，避免跨集场景空等。
+  async function fetchEpisodeSubtitleBodyFresh(video, subtitle, selectedLanguage) {
+    const hint = '字幕下载被拒绝（HTTP 403）：直链可能已过期，请刷新页面后重试';
+    try {
+      return await fetchSubtitleBody(video, subtitle);
+    } catch (error) {
+      if (error?.status !== 403) throw error;
+      console.warn('[复制字幕] 跨集字幕直链被拒（HTTP 403），尝试换取新直链', error);
+      let fresh = null;
+      try {
+        const subtitles = await fetchEpisodeSubtitleMeta(video, { force: true });
+        fresh = (subtitle.lan && subtitles.find(s => s.lan === subtitle.lan))
+          || chooseSubtitle(subtitles, selectedLanguage);
+      } catch (metaError) {
+        console.warn('[复制字幕] 跨集刷新字幕列表失败', metaError);
+      }
+      if (!fresh?.subtitle_url || fresh.subtitle_url === subtitle.subtitle_url) throw new Error(hint);
+      try {
+        return await fetchSubtitleBody(video, fresh);
+      } catch (retryError) {
+        if (retryError?.status !== 403) throw retryError;
+        throw new Error(hint);
+      }
+    }
+  }
+
+  // 选集选择面板：与章节面板同一套交互（全部选集 ⇄ 勾选集数），另加语言偏好下拉。
+  // 语言选项来自首个分P的字幕列表；单集缺失所选语言时逐集自动回退（中文优先）。
+  function showEpisodePanel(options) {
+    return new Promise(resolve => {
+      const { pages, videoTitle, languageOptions, currentLanguage, currentPage } = options;
+      const host = document.createElement('div');
+      host.id = EPISODE_PANEL_HOST_ID;
+      host.style.cssText = 'position:fixed;inset:0;z-index:2147483646';
+      const root = host.attachShadow({ mode: 'open' });
+      const style = document.createElement('style');
+      style.textContent = `
+        .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:#222}
+        .panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min(430px,92vw);max-height:80vh;display:flex;flex-direction:column}
+        .title{font-size:16px;font-weight:600;padding:14px 16px 4px;color:#222}
+        .subtitle{font-size:12px;color:#888;padding:0 16px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .hint{font-size:12px;color:#888;padding:0 16px 8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+        .hint button.link{border:none;background:none;color:#00aeec;cursor:pointer;font-size:12px;padding:0;flex:none}
+        .lang{display:flex;align-items:center;gap:8px;padding:0 16px 8px;font-size:12px;color:#888}
+        .lang select{border:1px solid #d9d9d9;border-radius:6px;padding:3px 8px;font-size:12px;color:#222;background:#fff}
+        .list{overflow-y:auto;padding:4px 16px;flex:1}
+        .row{display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer;color:#222;font-size:14px}
+        .row:hover{background:#f2f3f5}
+        .row input{width:15px;height:15px;cursor:pointer;flex:none;margin:0}
+        .row.dim{opacity:.45}
+        .row .current{color:#00aeec;font-size:12px;flex:none}
+        .row .dur{color:#999;font-size:12px;flex:none}
+        .full{font-weight:600;border-bottom:1px solid #eee;margin-bottom:4px}
+        .actions{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid #eee}
+        .actions .status{flex:1;font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .actions button{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;color:#222}
+        .actions button.ok{background:#00aeec;border-color:#00aeec;color:#fff}
+        .actions button:disabled{opacity:.6;cursor:default}
+      `;
+      root.appendChild(style);
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = '跨集复制字幕';
+      const subtitleLine = document.createElement('div');
+      subtitleLine.className = 'subtitle';
+      subtitleLine.textContent = videoTitle || '';
+      subtitleLine.title = videoTitle || '';
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      const hintText = document.createElement('span');
+      hintText.textContent = '默认复制全部选集；取消后可勾选需要的集数，输出按 【Pn】【标题】 分段。';
+      hint.appendChild(hintText);
+      const toggleAllBtn = document.createElement('button');
+      toggleAllBtn.type = 'button';
+      toggleAllBtn.className = 'link';
+      toggleAllBtn.textContent = '全选/清空';
+      hint.appendChild(toggleAllBtn);
+
+      const langRow = document.createElement('div');
+      langRow.className = 'lang';
+      const langLabel = document.createElement('span');
+      langLabel.textContent = '字幕语言：';
+      const langSelect = document.createElement('select');
+      const autoOption = document.createElement('option');
+      autoOption.value = 'auto';
+      autoOption.textContent = '自动（中文优先）';
+      langSelect.appendChild(autoOption);
+      (languageOptions || []).forEach(option => {
+        const el = document.createElement('option');
+        el.value = option.lan;
+        el.textContent = option.label;
+        langSelect.appendChild(el);
+      });
+      langSelect.value = languageOptions.some(option => option.lan === currentLanguage) ? currentLanguage : 'auto';
+      langRow.appendChild(langLabel);
+      langRow.appendChild(langSelect);
+      langRow.title = '所选语言在某集缺失时，该集自动回退为中文优先';
+
+      const list = document.createElement('div');
+      list.className = 'list';
+      const fullRow = document.createElement('label');
+      fullRow.className = 'row full';
+      const fullCb = document.createElement('input');
+      fullCb.type = 'checkbox';
+      fullCb.checked = true;
+      const fullText = document.createElement('span');
+      fullText.textContent = `全部选集（共 ${pages.length} 集）`;
+      fullRow.appendChild(fullCb);
+      fullRow.appendChild(fullText);
+      list.appendChild(fullRow);
+
+      const boxes = [];
+      pages.forEach((page, index) => {
+        const row = document.createElement('label');
+        row.className = 'row dim';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = false;
+        const span = document.createElement('span');
+        span.textContent = `P${page.page} ${page.part || `第${page.page}个分P`}`;
+        const dur = document.createElement('span');
+        dur.className = 'dur';
+        dur.textContent = page.duration ? fmtClock(page.duration * 1000) : '';
+        row.appendChild(cb);
+        row.appendChild(span);
+        row.appendChild(dur);
+        if (page.page === Number(currentPage)) {
+          const current = document.createElement('span');
+          current.className = 'current';
+          current.textContent = '当前';
+          row.appendChild(current);
+        }
+        list.appendChild(row);
+        boxes.push({ cb, row });
+      });
+
+      const syncMode = () => {
+        const full = fullCb.checked;
+        for (const b of boxes) b.row.classList.toggle('dim', full);
+      };
+      fullCb.addEventListener('change', () => {
+        if (fullCb.checked) for (const b of boxes) b.cb.checked = false;
+        syncMode();
+      });
+      for (const b of boxes) {
+        b.cb.addEventListener('change', () => {
+          if (b.cb.checked) fullCb.checked = false;
+          syncMode();
+        });
+      }
+      toggleAllBtn.addEventListener('click', () => {
+        const anyUnchecked = boxes.some(b => !b.cb.checked);
+        for (const b of boxes) b.cb.checked = anyUnchecked;
+        fullCb.checked = !anyUnchecked;
+        syncMode();
+      });
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const status = document.createElement('span');
+      status.className = 'status';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = '取消';
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.textContent = '开始复制';
+      okBtn.className = 'ok';
+      actions.appendChild(status);
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+
+      let settled = false;
+      // 关闭面板同时标记复制中止：运行中点取消/Esc/遮罩即停止后续集数；
+      // 复制完成后的自动关闭也走这里（重复调用无副作用）。
+      const close = result => {
+        episodeCopyCancelled = true;
+        window.removeEventListener('keydown', onKey);
+        host.remove();
+        if (!settled) {
+          settled = true;
+          resolve(result);
+        }
+      };
+      const onKey = e => { if (e.key === 'Escape') close(null); };
+      cancelBtn.addEventListener('click', () => close(null));
+      okBtn.addEventListener('click', () => {
+        let picked;
+        if (fullCb.checked) {
+          picked = pages.slice();
+        } else {
+          picked = pages.filter((_, i) => boxes[i].cb.checked);
+        }
+        if (!picked.length) { showToast('请至少勾选一集，或保持全部选集'); return; }
+        okBtn.disabled = true;
+        // 面板保持打开展示逐集进度，关闭交给复制执行器完成后调用 close()。
+        settled = true;
+        resolve({ pages: picked, language: langSelect.value || 'auto', status, okBtn, close: () => close(null) });
+      });
+      overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+      window.addEventListener('keydown', onKey);
+
+      panel.appendChild(title);
+      panel.appendChild(subtitleLine);
+      panel.appendChild(hint);
+      panel.appendChild(langRow);
+      panel.appendChild(list);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      root.appendChild(overlay);
+      document.body.appendChild(host);
+    });
+  }
+
+  // 跨集复制执行器：逐集取字幕列表→正文→归一化，按 【Pn】【标题】 分段拼接。
+  // 复用全站统一缓存（BODY_CACHE_PREFIX/META_CACHE_PREFIX），与单视频复制互通。
+  async function runCrossEpisodeCopy(bvid, aid, pages, language, ui) {
+    const sections = [];
+    const skipped = [];
+    episodeCopyCancelled = false;
+    let done = 0;
+    for (const pageInfo of pages) {
+      if (episodeCopyCancelled) return null;
+      ui.progress(done, pages.length, pageInfo);
+      const video = { site: 'bilibili', bvid, aid, cid: pageInfo.cid };
+      try {
+        const subtitles = await fetchEpisodeSubtitleMeta(video);
+        const subtitle = chooseSubtitle(subtitles, language);
+        if (!subtitle?.subtitle_url) {
+          skipped.push(`P${pageInfo.page}`);
+        } else {
+          const cacheKey = `${videoCacheKey(video)}:${subtitle.lan || subtitle.subtitle_url}`;
+          let text = readCache(BODY_CACHE_PREFIX, cacheKey);
+          if (!text) {
+            const body = await fetchEpisodeSubtitleBodyFresh(video, subtitle, language);
+            text = normalizeSubtitle(body);
+            if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
+          }
+          if (!text) {
+            skipped.push(`P${pageInfo.page}`);
+          } else {
+            sections.push(`【P${pageInfo.page}】${pageInfo.part || `第${pageInfo.page}个分P`}\n${text}`);
+          }
+        }
+      } catch (error) {
+        console.warn('[复制字幕] 跨集获取失败', `P${pageInfo.page}`, error);
+        skipped.push(`P${pageInfo.page}`);
+      }
+      done += 1;
+      ui.progress(done, pages.length, null);
+      // 集与集之间稍作停顿，避免对字幕接口形成连发。
+      if (pages.indexOf(pageInfo) < pages.length - 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 150));
+      }
+    }
+    if (episodeCopyCancelled) return null;
+    if (!sections.length) {
+      const guest = !document.cookie.includes('DedeUserID');
+      showToast(guest
+        ? '所选集数均未获取到字幕：未登录 B 站时字幕不可见，请先登录'
+        : '所选集数均未获取到字幕');
+      return null;
+    }
+    const combined = sections.join('\n\n');
+    await writeClipboard(combined);
+    showToast(skipped.length
+      ? `已复制 ${sections.length} 集字幕（未获取到：${skipped.join('、')}），共 ${combined.length} 个字符`
+      : `已复制 ${sections.length} 集字幕，共 ${combined.length} 个字符`);
+    return combined;
+  }
+
+  // 跨集复制入口：读取选集 → 弹面板 → 执行复制。面板打开期间不重复进入。
+  async function openCrossEpisodeCopy() {
+    if (document.getElementById(EPISODE_PANEL_HOST_ID)) return;
+    try {
+      const bvid = getIdFromPage().bvid;
+      if (!bvid) {
+        showToast('没有识别到当前视频 BV 号，请刷新页面后重试');
+        return;
+      }
+      const info = await fetchVideoPages(bvid);
+      if (!info.pages.length) {
+        showToast('当前视频没有可用的选集信息');
+        return;
+      }
+      if (info.pages.length <= 1) {
+        showToast('当前视频只有一个分P，无需跨集复制');
+        return;
+      }
+      // 语言选项取首个分P的字幕列表（各分P语言通常一致；缺失时逐集自动回退）。
+      let languageOptions = [];
+      try {
+        const firstSubs = await fetchEpisodeSubtitleMeta({ site: 'bilibili', bvid, aid: info.aid, cid: info.pages[0].cid });
+        languageOptions = firstSubs
+          .map(s => ({ lan: s.lan || '', label: subtitleLanguageLabel(s) }))
+          .filter(option => option.lan);
+      } catch (error) {
+        console.warn('[复制字幕] 读取语言选项失败，仅保留自动', error);
+      }
+      const currentLanguage = document.getElementById(SELECT_ID)?.value || 'auto';
+      const picked = await showEpisodePanel({
+        pages: info.pages,
+        videoTitle: info.title,
+        languageOptions,
+        currentLanguage,
+        currentPage: Number(new URL(location.href).searchParams.get('p')) || 1,
+      });
+      if (!picked) return;
+      try {
+        await runCrossEpisodeCopy(bvid, info.aid, picked.pages, picked.language, {
+          progress: (done, total, current) => {
+            picked.okBtn.textContent = `正在获取（${done}/${total}）`;
+            picked.status.textContent = current
+              ? `正在获取 P${current.page} ${current.part || ''}`
+              : `已完成 ${done}/${total}`;
+          },
+        });
+      } finally {
+        picked.close();
+      }
+    } catch (error) {
+      console.error('[复制字幕]', error);
+      showToast(`跨集复制失败：${error.message || error}`);
+    }
+  }
+
+  // 选集面板头部的“跨集复制”入口：仅多分P的 /video/ 页显示；页面重渲染/切换
+  // 视频后由轻量巡检重建或摘除，不影响选集面板自身的交互。
+  function mountEpisodeButton() {
+    const existing = document.getElementById(EPISODE_BUTTON_ID);
+    if (site !== 'bilibili' || !/\/video\//.test(location.pathname)) {
+      if (existing) existing.remove();
+      return;
+    }
+    const pageCount = (unsafeWindowOrWindow().__INITIAL_STATE__?.videoData?.pages || []).length;
+    if (pageCount === 1) {
+      if (existing) existing.remove();
+      return;
+    }
+    const headerTop = document.querySelector('.video-pod .header-top');
+    if (!headerTop) return;
+    if (existing && headerTop.contains(existing)) return;
+    if (existing) existing.remove();
+    const button = document.createElement('button');
+    button.id = EPISODE_BUTTON_ID;
+    button.type = 'button';
+    button.textContent = '跨集复制';
+    button.title = '按选集跨分P复制字幕：勾选集数，逐集获取后按 【Pn】【标题】 分段拼接';
+    button.style.cssText = 'flex:none;border:none;background:none;padding:0;margin-left:8px;'
+      + 'font-size:12px;line-height:18px;color:#9499A0;cursor:pointer;font-family:inherit;';
+    button.addEventListener('mouseenter', () => { button.style.color = '#00aeec'; });
+    button.addEventListener('mouseleave', () => { button.style.color = '#9499A0'; });
+    button.addEventListener('click', openCrossEpisodeCopy);
+    const slot = headerTop.querySelector('.right') || headerTop.querySelector('.left') || headerTop;
+    slot.appendChild(button);
+  }
+
+  {
+    GM_registerMenuCommand('跨集复制字幕（选集）', openCrossEpisodeCopy);
+    mountEpisodeButton();
+    window.setInterval(() => {
+      try { mountEpisodeButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
+    }, 1500);
   }
 
   {
