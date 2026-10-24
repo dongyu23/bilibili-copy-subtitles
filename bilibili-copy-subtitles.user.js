@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.3.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制。
+// @version      2.4.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费）。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -3703,11 +3703,69 @@
     });
   }
 
+  // 跨集场景的单集语音识别兜底：与单视频链路共用 StepFun 管线与缓存键
+  // （`视频:cid:asr-v3:full`），识别结果落在对应集名下——之后无论再点跨集复制
+  // 还是在该集上用「复制全部字幕」，都命中同一缓存，不会重复识别计费。
+  // 批量场景的交互差异：整集按全篇识别（不再逐集弹章节面板），费用确认只在
+  // 本次运行首次遇到无字幕集时询问一次，取消后本次运行不再询问。
+  async function transcribeEpisodeViaAsr(video, pageInfo, runState) {
+    if (!getAsrApiKey()) {
+      runState.keyMissing = true;
+      return '';
+    }
+    const selHash = selectionHash({ mode: 'full' });
+    const cacheKey = `${videoCacheKey(video)}:asr-v3:${selHash}`;
+    const cached = readCache(BODY_CACHE_PREFIX, cacheKey);
+    if (cached) return cached;
+    if (runState.declined) return '';
+    const track = await fetchAudioTrack(video);
+    const estimateSeconds = estimateAsrSeconds(track.duration);
+    if (!asrConsentGiven && !window.confirm(
+      `「P${pageInfo.page} ${pageInfo.part || `第${pageInfo.page}个分P`}」没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
+      + `并通过 StepFun 语音识别生成文字，会产生费用并上传音频。`
+      + `${estimateSeconds > 0 ? `根据历史记录预计用时约 ${Math.round(estimateSeconds)} 秒。` : ''}是否继续？`
+    )) {
+      runState.declined = true;
+      return '';
+    }
+    asrConsentGiven = true;
+    const startedAt = Date.now();
+    showProgressPanel();
+    let text = '';
+    let chunkCount = 1;
+    let asrDegraded = false;
+    try {
+      const result = await transcribeVideoAudio(video, track, { mode: 'full' }, {
+        onDownloadProgress: f => updateProgress('正在下载音频', f, ''),
+        onChunkDelta: () => updateProgress('正在识别', null, ''),
+        refreshTrack: () => fetchAudioTrack(video),
+      });
+      clearCheckpointsFor(videoCacheKey(video), selHash);
+      text = result.text;
+      chunkCount = result.chunkCount;
+      asrDegraded = !!result.degraded;
+    } finally {
+      hideProgressPanel();
+    }
+    if (!text) throw new Error('语音识别结果为空');
+    // 仅统计真实发生的识别；识别降级结果不写缓存（与单视频链路一致）。
+    if (!asrDegraded) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
+    pushAsrHistory({
+      audioSeconds: Math.round(track.duration || 0),
+      elapsedMs: Date.now() - startedAt,
+      chunkCount,
+      at: Date.now(),
+    });
+    return text;
+  }
+
   // 跨集复制执行器：逐集取字幕列表→正文→归一化，按 【Pn】【标题】 分段拼接。
-  // 复用全站统一缓存（BODY_CACHE_PREFIX/META_CACHE_PREFIX），与单视频复制互通。
+  // 复用全站统一缓存（BODY_CACHE_PREFIX/META_CACHE_PREFIX），与单视频复制互通；
+  // 无字幕的集回退语音识别（见 transcribeEpisodeViaAsr）。
   async function runCrossEpisodeCopy(bvid, aid, pages, language, ui) {
     const sections = [];
     const skipped = [];
+    const asrRunState = { declined: false, keyMissing: false };
     episodeCopyCancelled = false;
     let done = 0;
     for (const pageInfo of pages) {
@@ -3717,21 +3775,24 @@
       try {
         const subtitles = await fetchEpisodeSubtitleMeta(video);
         const subtitle = chooseSubtitle(subtitles, language);
-        if (!subtitle?.subtitle_url) {
-          skipped.push(`P${pageInfo.page}`);
-        } else {
+        let text = '';
+        if (subtitle?.subtitle_url) {
           const cacheKey = `${videoCacheKey(video)}:${subtitle.lan || subtitle.subtitle_url}`;
-          let text = readCache(BODY_CACHE_PREFIX, cacheKey);
+          text = readCache(BODY_CACHE_PREFIX, cacheKey);
           if (!text) {
             const body = await fetchEpisodeSubtitleBodyFresh(video, subtitle, language);
             text = normalizeSubtitle(body);
             if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
           }
-          if (!text) {
-            skipped.push(`P${pageInfo.page}`);
-          } else {
-            sections.push(`【P${pageInfo.page}】${pageInfo.part || `第${pageInfo.page}个分P`}\n${text}`);
-          }
+        } else {
+          // 该集没有字幕：走单视频同款语音识别兜底，结果按集缓存。
+          ui.note(`P${pageInfo.page} 无字幕，转语音识别`);
+          text = await transcribeEpisodeViaAsr(video, pageInfo, asrRunState);
+        }
+        if (!text) {
+          skipped.push(`P${pageInfo.page}`);
+        } else {
+          sections.push(`【P${pageInfo.page}】${pageInfo.part || `第${pageInfo.page}个分P`}\n${text}`);
         }
       } catch (error) {
         console.warn('[复制字幕] 跨集获取失败', `P${pageInfo.page}`, error);
@@ -3747,15 +3808,21 @@
     if (episodeCopyCancelled) return null;
     if (!sections.length) {
       const guest = !document.cookie.includes('DedeUserID');
+      const asrHint = asrRunState.keyMissing
+        ? '（配置 StepFun Key 后无字幕集可自动语音识别）'
+        : (asrRunState.declined ? '（已按选择跳过语音识别）' : '');
       showToast(guest
-        ? '所选集数均未获取到字幕：未登录 B 站时字幕不可见，请先登录'
-        : '所选集数均未获取到字幕');
+        ? `所选集数均未获取到字幕：未登录 B 站时字幕不可见，请先登录${asrHint}`
+        : `所选集数均未获取到字幕${asrHint}`);
       return null;
     }
+    const asrHint = asrRunState.keyMissing
+      ? '；配置 StepFun Key 后无字幕集可自动语音识别'
+      : (asrRunState.declined ? '；已按选择跳过语音识别' : '');
     const combined = sections.join('\n\n');
     await writeClipboard(combined);
     showToast(skipped.length
-      ? `已复制 ${sections.length} 集字幕（未获取到：${skipped.join('、')}），共 ${combined.length} 个字符`
+      ? `已复制 ${sections.length} 集字幕（未获取到：${skipped.join('、')}${asrHint}），共 ${combined.length} 个字符`
       : `已复制 ${sections.length} 集字幕，共 ${combined.length} 个字符`);
     return combined;
   }
@@ -3805,6 +3872,7 @@
               ? `正在获取 P${current.page} ${current.part || ''}`
               : `已完成 ${done}/${total}`;
           },
+          note: text => { picked.status.textContent = text; },
         });
       } finally {
         picked.close();
