@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.4.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费）。
+// @version      2.5.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费）；v2.5 起跨集复制面板可选“AI 字幕无标点时改用语音识别”——B 站 AI 字幕源数据不含标点，勾选后无标点的集自动用语音识别重转出带标点文本（按集缓存，确认费用后才执行）。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -3587,6 +3587,22 @@
       langRow.appendChild(langSelect);
       langRow.title = '所选语言在某集缺失时，该集自动回退为中文优先';
 
+      // 重转选项：默认关闭。勾选后，AI 生成字幕全篇无标点的集改用语音识别
+      // 换取带标点文本（按集缓存、费用确认后才执行），用于把字幕喂给 AI 的场景。
+      const retranscribeRow = document.createElement('div');
+      retranscribeRow.className = 'lang';
+      const retranscribeLabel = document.createElement('label');
+      retranscribeLabel.style.cssText = 'display:flex;align-items:center;gap:6px;color:#888;cursor:pointer';
+      const retranscribeCb = document.createElement('input');
+      retranscribeCb.type = 'checkbox';
+      retranscribeCb.checked = false;
+      const retranscribeText = document.createElement('span');
+      retranscribeText.textContent = 'AI 字幕无标点时改用语音识别（产生费用）';
+      retranscribeLabel.appendChild(retranscribeCb);
+      retranscribeLabel.appendChild(retranscribeText);
+      retranscribeRow.appendChild(retranscribeLabel);
+      retranscribeRow.title = 'B 站 AI 字幕源数据不含标点；勾选后，检测到 AI 字幕全篇无标点的集会改用语音识别重转（文本自带标点），每集确认费用后才执行，结果按集缓存';
+
       const list = document.createElement('div');
       list.className = 'list';
       const fullRow = document.createElement('label');
@@ -3686,7 +3702,14 @@
         okBtn.disabled = true;
         // 面板保持打开展示逐集进度，关闭交给复制执行器完成后调用 close()。
         settled = true;
-        resolve({ pages: picked, language: langSelect.value || 'auto', status, okBtn, close: () => close(null) });
+        resolve({
+          pages: picked,
+          language: langSelect.value || 'auto',
+          retranscribePunctless: retranscribeCb.checked,
+          status,
+          okBtn,
+          close: () => close(null),
+        });
       });
       overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
       window.addEventListener('keydown', onKey);
@@ -3695,6 +3718,7 @@
       panel.appendChild(subtitleLine);
       panel.appendChild(hint);
       panel.appendChild(langRow);
+      panel.appendChild(retranscribeRow);
       panel.appendChild(list);
       panel.appendChild(actions);
       overlay.appendChild(panel);
@@ -3707,8 +3731,9 @@
   // （`视频:cid:asr-v3:full`），识别结果落在对应集名下——之后无论再点跨集复制
   // 还是在该集上用「复制全部字幕」，都命中同一缓存，不会重复识别计费。
   // 批量场景的交互差异：整集按全篇识别（不再逐集弹章节面板），费用确认只在
-  // 本次运行首次遇到无字幕集时询问一次，取消后本次运行不再询问。
-  async function transcribeEpisodeViaAsr(video, pageInfo, runState) {
+  // 本次运行首次需要识别时询问一次，取消后本次运行不再询问。
+  // reason：确认弹窗里说明为什么要识别（无字幕 / AI 字幕无标点重转）。
+  async function transcribeEpisodeViaAsr(video, pageInfo, runState, reason) {
     if (!getAsrApiKey()) {
       runState.keyMissing = true;
       return '';
@@ -3721,8 +3746,8 @@
     const track = await fetchAudioTrack(video);
     const estimateSeconds = estimateAsrSeconds(track.duration);
     if (!asrConsentGiven && !window.confirm(
-      `「P${pageInfo.page} ${pageInfo.part || `第${pageInfo.page}个分P`}」没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
-      + `并通过 StepFun 语音识别生成文字，会产生费用并上传音频。`
+      `「P${pageInfo.page} ${pageInfo.part || `第${pageInfo.page}个分P`}」${reason || '没有字幕'}，将下载音频（约 ${formatAudioDuration(track.duration)}）`
+      + `并通过 StepFun 语音识别生成文字（自带标点），会产生费用并上传音频。`
       + `${estimateSeconds > 0 ? `根据历史记录预计用时约 ${Math.round(estimateSeconds)} 秒。` : ''}是否继续？`
     )) {
       runState.declined = true;
@@ -3759,10 +3784,19 @@
     return text;
   }
 
+  // 判断字幕正文是否基本无标点：B 站 AI 字幕管线通常不输出标点（播放器显示
+  // 的同样没有），密度阈值取 1%——正常带标点文本远高于此，稀疏逗号不会误判。
+  function isPunctuationLessText(text) {
+    const s = String(text || '');
+    if (s.length < 80) return false;
+    const marks = (s.match(/[。，、；：！？…“”‘’（）()\[\]【】《》“”<>,.!?;:]/g) || []).length;
+    return marks / s.length < 0.01;
+  }
+
   // 跨集复制执行器：逐集取字幕列表→正文→归一化，按 【Pn】【标题】 分段拼接。
   // 复用全站统一缓存（BODY_CACHE_PREFIX/META_CACHE_PREFIX），与单视频复制互通；
-  // 无字幕的集回退语音识别（见 transcribeEpisodeViaAsr）。
-  async function runCrossEpisodeCopy(bvid, aid, pages, language, ui) {
+  // 无字幕的集回退语音识别；勾选重转选项时，无标点的 AI 字幕同样改走语音识别。
+  async function runCrossEpisodeCopy(bvid, aid, pages, language, ui, options = {}) {
     const sections = [];
     const skipped = [];
     const asrRunState = { declined: false, keyMissing: false };
@@ -3783,6 +3817,14 @@
             const body = await fetchEpisodeSubtitleBodyFresh(video, subtitle, language);
             text = normalizeSubtitle(body);
             if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
+          }
+          // 用户勾选重转且该集是 AI 生成字幕、全篇基本无标点时，改走语音识别
+          // 换取带标点文本（识别结果与无字幕兜底共用同一份按集缓存）。
+          if (options.retranscribePunctless && text
+            && isGeneratedSubtitle(subtitle) && isPunctuationLessText(text)) {
+            ui.note(`P${pageInfo.page} AI 字幕无标点，转语音识别`);
+            const asrText = await transcribeEpisodeViaAsr(video, pageInfo, asrRunState, '的 AI 字幕没有标点');
+            if (asrText) text = asrText;
           }
         } else {
           // 该集没有字幕：走单视频同款语音识别兜底，结果按集缓存。
@@ -3873,7 +3915,7 @@
               : `已完成 ${done}/${total}`;
           },
           note: text => { picked.status.textContent = text; },
-        });
+        }, { retranscribePunctless: !!picked.retranscribePunctless });
       } finally {
         picked.close();
       }
