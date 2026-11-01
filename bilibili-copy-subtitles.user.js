@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.5.2
-// @description  一键复制 Bilibili / YouTube / 微信视频号视频的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。
+// @version      2.6.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -13,6 +13,7 @@
 // @match        https://www.youtube.com/watch*
 // @match        https://channels.weixin.qq.com/*
 // @match        https://yuanbao.tencent.com/*
+// @match        https://tingwu.aliyun.com/*
 // @grant        GM_setClipboard
 // @grant        GM_addStyle
 // @grant        GM_registerMenuCommand
@@ -35,6 +36,7 @@
 // @connect      channels.weixin.qq.com
 // @connect      yuanbao.tencent.com
 // @connect      finder.video.qq.com
+// @connect      tingwu.aliyun.com
 // @run-at       document-idle
 // @license      MIT
 // @downloadURL  https://raw.githubusercontent.com/dongyu23/bilibili-copy-subtitles/main/bilibili-copy-subtitles.user.js
@@ -87,6 +89,7 @@
     if (host.endsWith('youtube.com')) return 'youtube';
     if (host.endsWith('channels.weixin.qq.com')) return 'wxchannels';
     if (host.endsWith('yuanbao.tencent.com')) return 'yuanbao';
+    if (host.endsWith('tingwu.aliyun.com')) return 'tingwu';
     return '';
   }
   const site = detectSite();
@@ -3277,7 +3280,160 @@
     return localStorage.getItem(HIDDEN_KEY) === '1';
   }
 
+  // ===== 通义听悟（tingwu.aliyun.com）转写页适配 =====
+  // 路由：/doc/transcripts/<transId>（自己的记录）、/discover/transcripts/<transId>（分享）、
+  //       /doc/share/<transId>?path=<原路径>（分享副本）。
+  // 数据接口与页面同源，Cookie 由浏览器自动携带，无需额外签名：
+  //   POST /api/trans/getTransResult?c=web
+  //   body {"action":"getTransResult","version":"1.0","transId":"<id>"}
+  //   resp.code === "0" 时 resp.data.result 是 JSON 字符串：
+  //     { pg: [ { pi: 段落ID, ui: 发言人ID, sc: [ 词条... ] } ] }
+  //   词条用紧凑字段（与页面 toJSON/fromJSON 的往返一致）：
+  //     { id: 词ID, bt: 开始ms, et: 结束ms, si: 句ID, tc: 文字, tag: { mark } }
+  //   下面同时兼容完整字段 { wid, beginTime, endTime, sentenceId, text } 的写法，
+  //   任一侧改字段名都不会让抓取直接失败。
+  const TINGWU_TRANS_API = '/api/trans/getTransResult?c=web';
+  const TINGWU_BUTTON_ID = 'bili-copy-tingwu-button';
+
+  function tingwuTransId() {
+    const patterns = [
+      /^\/(?:doc|discover)\/transcripts\/([A-Za-z0-9_-]+)/,
+      /^\/doc\/share\/([A-Za-z0-9_-]+)/,
+    ];
+    for (const re of patterns) {
+      const m = re.exec(location.pathname);
+      if (m) return decodeURIComponent(m[1]);
+    }
+    // 分享副本页把真实路径放在 ?path= 里。
+    const path = new URLSearchParams(location.search).get('path') || '';
+    const m2 = /\/(?:doc|discover)\/transcripts\/([A-Za-z0-9_-]+)/.exec(path);
+    return m2 ? decodeURIComponent(m2[1]) : '';
+  }
+
+  function tingwuWordText(word) {
+    if (!word || typeof word !== 'object') return '';
+    const raw = word.text ?? word.tc ?? word.w ?? word.content ?? word.t;
+    return raw == null ? '' : String(raw);
+  }
+
+  // result 可能是对象，也可能是需要再 JSON.parse 一次的字符串。
+  function tingwuParseResult(raw) {
+    let result = raw;
+    if (typeof result === 'string') {
+      try { result = JSON.parse(result); } catch (_) { return null; }
+    }
+    if (!result || typeof result !== 'object' || !Array.isArray(result.pg)) return null;
+    const paragraphs = [];
+    for (const pg of result.pg) {
+      if (!pg || typeof pg !== 'object') continue;
+      const sc = Array.isArray(pg.sc) ? pg.sc : [];
+      let text = '';
+      let beginMs = null;
+      for (const word of sc) {
+        text += tingwuWordText(word);
+        const bt = word && (word.bt ?? word.beginTime);
+        if (bt != null && beginMs == null) beginMs = Number(bt);
+      }
+      paragraphs.push({ pid: pg.pi, uid: pg.ui, beginMs, text });
+    }
+    return { title: result.title || '', paragraphs };
+  }
+
+  async function fetchTingwuTranscript(transId) {
+    const payload = JSON.stringify({ action: 'getTransResult', version: '1.0', transId });
+    let json;
+    try {
+      const resp = await fetch(TINGWU_TRANS_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: payload,
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (!resp.ok) throw new Error(`听悟接口 HTTP ${resp.status}`);
+      json = await resp.json();
+    } catch (error) {
+      // 原生请求失败时回退油猴跨域请求（与其它链路一致）。
+      if (typeof GM_xmlhttpRequest !== 'function') throw error;
+      json = await new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+          method: 'POST',
+          url: TINGWU_TRANS_API,
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          data: payload,
+          timeout: 30000,
+          onload(response) {
+            if (response.status < 200 || response.status >= 300) {
+              reject(new Error(`听悟接口 HTTP ${response.status}`));
+              return;
+            }
+            try { resolve(JSON.parse(response.responseText)); }
+            catch (_) { reject(new Error('听悟接口返回非 JSON')); }
+          },
+          ontimeout: () => reject(new Error('听悟接口超时')),
+          onerror: () => reject(new Error('听悟接口请求失败')),
+        });
+      });
+    }
+    if (json.code !== '0' && json.code !== 0) {
+      throw new Error(`听悟接口：${json.message || json.code || '未知错误'}`);
+    }
+    return json.data || {};
+  }
+
+  async function copyTingwuTranscript() {
+    const button = document.getElementById(TINGWU_BUTTON_ID);
+    const transId = tingwuTransId();
+    if (!transId) {
+      showToast('未能从地址解析出转写 ID（需在转写详情页使用）');
+      return;
+    }
+    if (button) { button.disabled = true; button.textContent = '正在获取'; }
+    try {
+      const data = await fetchTingwuTranscript(transId);
+      const parsed = tingwuParseResult(data.result);
+      const text = parsed ? parsed.paragraphs.map(p => p.text).filter(Boolean).join('\n') : '';
+      if (!text) {
+        // 解析不出文字时把实际结构打到控制台，便于按真实字段修正，而不是静默失败。
+        console.warn('[复制字幕][听悟] 未解析出文字', {
+          transId,
+          dataKeys: data && typeof data === 'object' ? Object.keys(data) : [],
+          resultType: typeof data.result,
+          pgCount: parsed ? parsed.paragraphs.length : -1,
+        });
+        showToast('未解析出转写文字（接口结构可能已变更，详见控制台）');
+        return;
+      }
+      await writeClipboard(text);
+      showToast(`已复制通义听悟转写，共 ${text.length} 个字符`);
+    } catch (error) {
+      console.error('[复制字幕][听悟]', error);
+      showToast(`复制失败：${error.message || error}`);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = '复制听悟转写'; }
+    }
+  }
+
+  function mountTingwuButton() {
+    if (site !== 'tingwu' || !document.body) return;
+    if (!tingwuTransId()) return; // 只在转写详情页挂按钮
+    if (document.getElementById(TINGWU_BUTTON_ID)) return;
+    const button = document.createElement('button');
+    button.id = TINGWU_BUTTON_ID;
+    button.type = 'button';
+    button.textContent = '复制听悟转写';
+    button.title = '复制当前通义听悟转写的纯文字';
+    button.style.cssText = 'position:fixed;left:8px;bottom:16px;z-index:100001;'
+      + 'min-height:44px;padding:8px 12px;border:0;border-radius:6px;color:#fff;'
+      + 'background:#00aeec;box-shadow:0 4px 14px rgba(0,0,0,.18);cursor:pointer;'
+      + 'font:13px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+    button.addEventListener('click', copyTingwuTranscript);
+    document.body.appendChild(button);
+  }
+
   function mountButton() {
+    // 听悟页面只挂自己的「复制听悟转写」按钮，不挂其它站点的控件。
+    if (site === 'tingwu') return;
     if (!document.body || document.getElementById(CONTROLS_ID)) return;
     const controls = document.createElement('div');
     controls.id = CONTROLS_ID;
@@ -3955,5 +4111,18 @@
       childList: true,
       subtree: true,
     });
+  }
+
+  // 通义听悟是单页应用：URL 变化不重跑脚本，用巡检 + MutationObserver 挂按钮。
+  if (site === 'tingwu') {
+    GM_registerMenuCommand('复制通义听悟转写', copyTingwuTranscript);
+    mountTingwuButton();
+    new MutationObserver(mountTingwuButton).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+    window.setInterval(() => {
+      try { mountTingwuButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
+    }, 1500);
   }
 })();

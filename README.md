@@ -1,10 +1,10 @@
-# Bilibili / YouTube / 视频号 一键复制全部字幕
+# Bilibili / YouTube / 视频号 / 通义听悟 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.2.1-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.6.0-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
-一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube** 和 **微信视频号**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字。
+一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube**、**微信视频号** 和 **通义听悟**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字；通义听悟则在转写详情页一键复制整篇转写稿。
 
 复制结果保留正文标点，不包含时间戳、字幕序号、JSON 字段或其他字幕文件边界符号，适合整理笔记、检索内容和制作摘要。脚本会按当前视频和分 P 缓存字幕列表及正文，重复读取时不会重新随机匹配其他视频的字幕。对于没有字幕的视频，可以在设置 StepFun API Key 后回退到语音识别，自动生成可复制的纯文字内容。
 
@@ -52,7 +52,7 @@ YouTube 链路通过 YouTube 官方的 InnerTube 播放器接口读取字幕轨�
 
 ## 功能
 
-- 一键复制当前视频或当前分P的完整字幕（B站 / YouTube / 视频号 三站点）
+- 一键复制当前视频或当前分P的完整字幕（B站 / YouTube / 视频号 / 通义听悟）
 - 字幕直链过期（CDN 返回 403）时自动换取新直链重试，失败给出可操作提示
 - 自动去除时间戳、序号和字幕格式边界
 - 保留字幕正文原有标点
@@ -65,6 +65,7 @@ YouTube 链路通过 YouTube 官方的 InnerTube 播放器接口读取字幕轨�
 - 无字幕视频可回退到 StepFun 语音识别，生成纯文字内容（B站 / YouTube 均支持）
 - 视频号转文字：粘贴分享链接即自动完成「解析 → 下载 → 语音识别 → 剪贴板」
 - 上传转文字：选择本地视频/音频文件，经同一套 StepFun 语音识别转成文字
+- 通义听悟转写：在转写详情页一键复制整篇转写稿，详见下文「通义听悟转文字」
 - 语音识别 Key 图形化配置面板，支持一键测试连接
 - 元宝 Cookie 支持一键读取与登录态测试，解析/取直链失败时给出可操作的错误原因
 - 设置面板集中管理：Key、识别端点、识别语言、调试开关、元宝 Cookie、缓存留存时间
@@ -218,6 +219,49 @@ B 站视频带有章节信息（进度条上可见的分段，且不少于 2 个
 - 转写完成后文字自动进入剪贴板，并显示在面板文本框里可再次复制；
 - 识别结果不按文件缓存，重复转写同一文件会重新计费。
 
+## 通义听悟转文字
+
+通义听悟（tingwu.aliyun.com）的转写结果页可以直接抓取整篇转写稿，不需要走语音识别、不计费。
+
+### 使用方式
+
+1. 登录通义听悟，打开任意转写详情页（自己的记录或别人分享的链接均可）。
+2. 点击页面左下角的 **复制听悟转写** 按钮。
+3. 转写正文直接进入剪贴板，并提示字符数。
+
+按钮只在转写详情页出现，听悟的首页、列表页等其它页面不会挂。听悟是单页应用，站内跳转后按钮会自动重新挂载。
+
+### 支持的页面
+
+```text
+https://tingwu.aliyun.com/doc/transcripts/*        自己的记录
+https://tingwu.aliyun.com/discover/transcripts/*   分享链接
+https://tingwu.aliyun.com/doc/share/*              分享副本（id 在 ?path= 里时也能取到）
+```
+
+### 工作方式
+
+- 数据接口与页面同源，Cookie 由浏览器自动携带，**不需要任何签名，也不额外请求 StepFun**：
+
+  ```
+  POST /api/trans/getTransResult?c=web
+  {"action":"getTransResult","version":"1.0","transId":"<地址栏里的 id>"}
+  ```
+
+- 返回的 `data.result` 是 JSON 字符串，结构为 `{ pg: [ { pi: 段落ID, ui: 发言人ID, sc: [ 词条 ] } ] }`；词条用紧凑字段 `{bt: 开始ms, et: 结束ms, id: 词ID, si: 句ID, tc: 文字}`。
+- 解码时同一段内的词条直接拼接（与听悟页面自身的拼接规则一致，中英文都不会粘字），段落之间换行，因此输出保留原始分段结构。
+- 解码器同时兼容完整字段 `{wid, beginTime, endTime, sentenceId, text}`，任一侧改字段名不会直接失败。
+- 解析不出文字时，控制台会打出 `[复制字幕][听悟] 未解析出文字` 及真实结构的 key，便于定位，不会静默失败。
+- 原生请求失败时回退 `GM_xmlhttpRequest`，与其它链路一致。
+
+### 排障
+
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| 听悟接口：need login. | 未登录或登录态过期 | 在听悟页面重新登录后刷新 |
+| 未能从地址解析出转写 ID | 不在转写详情页 | 从「我的记录」或分享链接进入详情页 |
+| 未解析出转写文字 | 接口结构变更 | 看控制台 `[复制字幕][听悟]` 打出的真实字段 |
+
 ## 支持的页面
 
 ```text
@@ -228,6 +272,7 @@ https://www.bilibili.com/medialist/play/*
 https://www.youtube.com/watch*
 https://channels.weixin.qq.com/*
 https://yuanbao.tencent.com/*
+https://tingwu.aliyun.com/*
 ```
 
 ## 权限说明
@@ -250,8 +295,9 @@ https://yuanbao.tencent.com/*
 | `channels.weixin.qq.com` | 视频号分享链接解析与视频信息获取 |
 | `yuanbao.tencent.com` | 视频号分享链接解析（需用户自备元宝登录 Cookie） |
 | `finder.video.qq.com` | 下载视频号视频文件 |
+| `tingwu.aliyun.com` | 读取通义听悟转写结果 |
 
-字幕链路不上传任何数据，也不收集浏览记录或统计信息；仅当主动使用语音识别兜底或视频号转文字时，音频/视频才会上传至 StepFun 接口。
+字幕链路不上传任何数据，也不收集浏览记录或统计信息；仅当主动使用语音识别兜底或视频号转文字时，音频/视频才会上传至 StepFun 接口。通义听悟链路只读取页面自己已经在用的同源接口，不额外上传任何内容。
 
 ## 常见问题
 
@@ -416,6 +462,15 @@ https://yuanbao.tencent.com/*
 - 按用户澄清的需求调整空格规则：字幕逐条轮番出现，条与条即自然断句点——拼接时每两条之间保留一个基础空格；上一行以标点结尾或下一行以标点开头时，标点已是边界、不再加空格；
 - 效果：B 站 AI 字幕等无标点字幕从“整段无边界”变为 `提到中值定理 如果你的第一反应就是微分中值定理 …`（每条之间有空格），带标点字幕（CC/识别结果）输出不变；
 - 单测 8 组拼接断言通过（无标点中文、标点结尾、英文标点后、下一行以标点开头、数字结尾行等场景）；真实浏览器回归：P2 中文 AI 字幕复制后每条之间有空格、P4 英文 `Next, Let's` 保持正常。
+
+`2.6.0`（通义听悟转写适配）：
+
+- **接口逆向**：听悟页面是 SPA 壳，转写数据接口为 `POST /api/trans/getTransResult?c=web`，body `{"action":"getTransResult","version":"1.0","transId":"<id>"}`，与页面同源、Cookie 自动携带、无需签名。`data.result` 为 JSON 字符串，结构 `{pg:[{pi, ui, sc:[{bt, et, id, si, tc}]}]}`（`tc` 为文字，`bt`/`et` 为起止毫秒，`id` 为词 ID，`si` 为句 ID，`pi` 为段落 ID，`ui` 为发言人 ID）；字段形状由 bundle 内 `toJSON`/`fromJSON` 的往返一致性确定。
+- **三种路由**：`/doc/transcripts/<id>`（自己的记录）、`/discover/transcripts/<id>`（分享）、`/doc/share/<id>?path=<原路径>`（分享副本，id 取路径段，路径段为空时回退 `?path=`）。
+- **单测**：21 组断言覆盖两种词条字段格式（紧凑 `tc` / 完整 `text`）、三种路由解析、`?path=` 回退、坏 JSON 字符串、缺 `pg`、空 `pg`、`sc` 非数组、空词条等边界，全部通过。
+- **真实登录态全链路自验证**（真实 Chrome + 真实账号 + 真实转写，非 mock）：登录态校验通过 → 进入转写页 → 按钮挂载 → 点击 → 真实 `getTransResult` 返回 `code=0`、`result` 1,276,842 字节 → toast「已复制通义听悟转写，共 41483 个字符」→ 剪贴板 41,483 字符，按钮状态正常恢复。
+- **交叉核对**：该转写接口自报 `wordCount=41265`、219 个段落、时长 6853 秒；脚本解码输出 41,483 字符（比值 1.01，中文转写的正常比例），1.28MB 数据解码耗时 11ms；剪贴板首尾均为连贯的课程内容，无时间戳、无 JSON 字段残留。
+- **回归**：`node --check` 通过；相对 v2.5.2 为纯增量（删除 0 行、新增 169 行），原有函数签名集合零差异，B 站 / YouTube / 视频号 / StepFun 链路未受影响。
 
 ## 开发检查
 
