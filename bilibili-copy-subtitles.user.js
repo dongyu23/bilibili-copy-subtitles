@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.6.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。
+// @version      2.6.1
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -639,11 +639,49 @@
           }
         },
         ontimeout: () => reject(new Error('油猴请求超时')),
-        onerror: response => reject(
-          new Error(`油猴请求失败${response?.status ? `（HTTP ${response.status}）` : ''}`)
-        ),
+        onerror: response => {
+          // 传输层失败时个别管理器也会带上 status，照原样透传，
+          // 否则调用方按 403 走换链重试的分支会失效。
+          const error = new Error(`油猴请求失败${response?.status ? `（HTTP ${response.status}）` : ''}`);
+          if (response && response.status) error.status = response.status;
+          reject(error);
+        },
       });
     });
+  }
+
+  // ===== 请求错误分类 =====
+  // fetch 抛出的 TypeError 信息量极低（浏览器里统一是 "Failed to fetch"），
+  // 但成因有很多种：CORS 被拒、DNS 解析失败、连接被拒、代理拦截、扩展阻止。
+  // 不分类的话用户只看到一句 "Failed to fetch"，完全无法自查。
+  // twoWayFailed = 浏览器与油猴两条通道都失败了。
+  function describeRequestError(error, url, twoWayFailed = false) {
+    const host = (() => {
+      try { return new URL(url, location.href).host; } catch (_) { return '未知地址'; }
+    })();
+    const message = String((error && error.message) || error || '未知错误');
+    const name = error && error.name;
+    if (name === 'AbortError' || name === 'TimeoutError') {
+      return new Error(`请求 ${host} 超时（已等待超过时限，可重试或换网络）`);
+    }
+    // 带了 HTTP 状态码的以状态码为准——调用方还要靠 error.status 走换链重试等分支，
+    // 这里不能把 403 之类改写成"无法连接"。
+    if (error && error.status) {
+      return new Error(`${host} 返回 HTTP ${error.status}`);
+    }
+    // 双通道都失败时，浏览器那一路必然是网络层错误（否则不会去试油猴），
+    // 油猴自己的错误信息降级为细节，主体给可操作建议。
+    // 单通道时也要认 Firefox 的 NetworkError、Safari 的 load failed 等措辞。
+    if (twoWayFailed || /Failed to fetch|NetworkError|load failed|fetch failed|network error/i.test(message)) {
+      const detail = twoWayFailed ? `（油猴通道：${message}）` : '';
+      return new Error(
+        `无法连接 ${host}（${twoWayFailed ? '浏览器与油猴两条请求通道都失败了' : '浏览器请求失败'}）${detail}。` +
+        `通常是：① 代理/VPN 把该域名路由到了失效节点——请关闭代理或把 ${host} 设为直连；` +
+        `② 浏览器扩展（广告拦截/隐私类）阻止了请求——请用无痕窗口试验；` +
+        `③ 脚本管理器的 @connect 未授权该域名。`
+      );
+    }
+    return new Error(`${host} 请求失败：${message}`);
   }
 
   async function requestJson(url, options = {}) {
@@ -668,12 +706,7 @@
     try {
       return await requestJsonByGM(url);
     } catch (gmError) {
-      const host = (() => {
-        try { return new URL(url, location.href).host; } catch (_) { return '未知地址'; }
-      })();
-      const error = new Error(
-        `${host} 请求失败：${gmError.message}；浏览器请求：${fetchError?.message || '失败'}`
-      );
+      const error = describeRequestError(gmError, url, true);
       // 透传 HTTP 状态码，调用方才能按 403 等状态走换链重试等分支。
       error.status = gmError.status || fetchError?.status;
       throw error;
@@ -682,13 +715,12 @@
 
   // 文本响应（YouTube 字幕为 XML）。
   async function requestText(url) {
-    let fetchError;
     try {
       const response = await fetch(url, { cache: 'no-store' });
       if (!response.ok) throw new Error(`浏览器请求返回 HTTP ${response.status}`);
       return await response.text();
-    } catch (error) {
-      fetchError = error;
+    } catch (_) {
+      // 浏览器请求失败，转入油猴通道；两条都失败时由 describeRequestError 分类。
     }
 
     return new Promise((resolve, reject) => {
@@ -709,19 +741,50 @@
         ),
       });
     }).catch(error => {
-      throw new Error(`${error.message || error}；浏览器请求：${fetchError?.message || '失败'}`);
+      throw describeRequestError(error, url, true);
     });
   }
 
   async function requestJsonPost(url, body) {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-    });
-    if (!response.ok) throw new Error(`接口返回 HTTP ${response.status}`);
-    return response.json();
+    const payload = JSON.stringify(body);
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`接口返回 HTTP ${response.status}`);
+      return response.json();
+    } catch (fetchError) {
+      // 与 requestJson 一致：浏览器失败时回退油猴通道，两条都失败才分类抛出。
+      if (typeof GM_xmlhttpRequest !== 'function' || /HTTP \d/.test(fetchError?.message || '')) {
+        throw describeRequestError(fetchError, url);
+      }
+      try {
+        return await new Promise((resolve, reject) => {
+          GM_xmlhttpRequest({
+            method: 'POST',
+            url,
+            headers: { 'Content-Type': 'application/json' },
+            data: payload,
+            timeout: 30000,
+            onload(response) {
+              if (response.status < 200 || response.status >= 300) {
+                reject(new Error(`接口返回 HTTP ${response.status}`));
+                return;
+              }
+              try { resolve(JSON.parse(response.responseText)); }
+              catch (_) { reject(new Error('接口返回非 JSON')); }
+            },
+            ontimeout: () => reject(new Error('接口请求超时')),
+            onerror: () => reject(new Error('接口请求失败')),
+          });
+        });
+      } catch (gmError) {
+        throw describeRequestError(gmError, url, true);
+      }
+    }
   }
 
   // ===== 缓存（带留存时间） =====
@@ -886,7 +949,14 @@
         console.warn('[复制字幕] 油猴 Range 请求失败，本次起改走页面 fetch', gmError.message);
       }
     }
-    const resp = await fetch(url, { headers: { Range: rangeValue }, cache: 'no-store' });
+    // 油猴通道失败后的页面兜底：这一步若再抛 TypeError，同样要走错误分类，
+    // 否则上层只会看到一句没有信息量的 "Failed to fetch"。
+    let resp;
+    try {
+      resp = await fetch(url, { headers: { Range: rangeValue }, cache: 'no-store' });
+    } catch (error) {
+      throw describeRequestError(error, url);
+    }
     if (!resp.ok && resp.status !== 206) throw new Error(`HTTP ${resp.status}（${host}）`);
     if (resp.status === 200 && start > 0) throw new Error('CDN 不支持 Range');
     const bytes = new Uint8Array(await resp.arrayBuffer());
@@ -2139,7 +2209,15 @@
   }
 
   async function downloadByFetch(url) {
-    const response = await fetch(url, { cache: 'no-store' });
+    let response;
+    try {
+      response = await fetch(url, { cache: 'no-store' });
+    } catch (error) {
+      // 下载链路会在多个 CDN 地址间重试，这里保持原始错误对象，
+      // 由外层统一分类，避免每条备用地址各报一遍同样的底层错误。
+      error.described = describeRequestError(error, url).message;
+      throw error;
+    }
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return new Uint8Array(await response.arrayBuffer());
   }
@@ -2177,7 +2255,8 @@
         break;
       }
     }
-    throw new Error(`音频下载失败：${lastError?.message || lastError}`);
+    // 优先用分类后的描述（downloadByFetch 挂的 described），拿不到才退回原始 message。
+    throw new Error(`音频下载失败：${lastError?.described || lastError?.message || lastError}`);
   }
 
   function bytesToBase64(bytes) {
@@ -2241,51 +2320,15 @@
     });
   }
 
-  async function transcribeAudioChunk(bytes, apiKey, onDelta, formatType = 'm4a') {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), ASR_REQUEST_TIMEOUT_MS);
-    let response;
-    try {
-      response = await fetch(getAsrEndpoint(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          audio: {
-            data: bytesToBase64(bytes),
-            input: {
-              transcription: {
-                model: ASR_MODEL,
-                language: getAsrLanguage(),
-                enable_itn: true,
-                // 开启时间戳后 SSE 增量会带回每段文字在音频中的位置，用于计算识别进度。
-                enable_timestamp: true,
-              },
-              format: { type: formatType },
-            },
-          },
-        }),
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw new Error(`语音识别接口返回 HTTP ${response.status}`);
-    if (!response.body) throw new Error('语音识别接口不支持流式读取');
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+  // SSE 增量解析器：浏览器流式读取与油猴整段返回两种来源共用同一套事件处理，
+  // 避免两条路径各写一遍解析逻辑而导致行为漂移。
+  function createSseParser(onDelta) {
     let buffer = '';
     let finalText = '';
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+    return {
+      get text() { return finalText; },
+      push(chunk) {
+        buffer += chunk;
         let separator = buffer.indexOf('\n\n');
         while (separator >= 0) {
           const block = buffer.slice(0, separator);
@@ -2305,12 +2348,128 @@
           }
           separator = buffer.indexOf('\n\n');
         }
+      },
+    };
+  }
+
+  // 路径一：浏览器流式读取（首选，可实时上报识别进度）。
+  async function transcribeChunkByFetch(endpoint, payload, apiKey, onDelta) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), ASR_REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: payload,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) throw new Error(`语音识别接口返回 HTTP ${response.status}`);
+    if (!response.body) throw new Error('语音识别接口不支持流式读取');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const parser = createSseParser(onDelta);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parser.push(decoder.decode(value, { stream: true }));
       }
     } finally {
       reader.releaseLock();
     }
-    if (!finalText) throw new Error('语音识别未返回文本');
-    return finalText;
+    if (!parser.text) throw new Error('语音识别未返回文本');
+    return parser.text;
+  }
+
+  // 路径二：油猴特权请求（浏览器 fetch 因跨域/网络失败时兜底）。
+  // GM_xmlhttpRequest 拿不到增量流，只能整段返回后一次性喂给解析器，
+  // 因此这条路没有实时进度，但结果与路径一完全一致。
+  function transcribeChunkByGM(endpoint, payload, apiKey, onDelta) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: endpoint,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        data: payload,
+        responseType: 'text',
+        timeout: ASR_REQUEST_TIMEOUT_MS,
+        onload(response) {
+          if (response.status < 200 || response.status >= 300) {
+            reject(new Error(`语音识别接口返回 HTTP ${response.status}`));
+            return;
+          }
+          try {
+            const parser = createSseParser(onDelta);
+            parser.push(response.responseText || '');
+            if (!parser.text) { reject(new Error('语音识别未返回文本')); return; }
+            resolve(parser.text);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        ontimeout: () => {
+          // 打上 transport 标记：调用方据此区分"没连到服务端"和"连到了但服务端报错"。
+          const error = new Error('语音识别请求超时');
+          error.transport = true;
+          reject(error);
+        },
+        onerror: () => {
+          const error = new Error('语音识别请求失败');
+          error.transport = true;
+          reject(error);
+        },
+      });
+    });
+  }
+
+  async function transcribeAudioChunk(bytes, apiKey, onDelta, formatType = 'm4a') {
+    const endpoint = getAsrEndpoint();
+    const payload = JSON.stringify({
+      audio: {
+        data: bytesToBase64(bytes),
+        input: {
+          transcription: {
+            model: ASR_MODEL,
+            language: getAsrLanguage(),
+            enable_itn: true,
+            // 开启时间戳后 SSE 增量会带回每段文字在音频中的位置，用于计算识别进度。
+            enable_timestamp: true,
+          },
+          format: { type: formatType },
+        },
+      },
+    });
+    try {
+      return await transcribeChunkByFetch(endpoint, payload, apiKey, onDelta);
+    } catch (fetchError) {
+      // 浏览器 fetch 失败（跨域被拒 / 网络不可达 / 被扩展拦截）时回退油猴通道。
+      // 注意：HTTP 4xx/5xx 说明请求已经打到服务端，换通道无意义，直接原样抛出。
+      if (typeof GM_xmlhttpRequest !== 'function' || /HTTP \d/.test(fetchError?.message || '')) {
+        throw describeRequestError(fetchError, endpoint);
+      }
+      try {
+        return await transcribeChunkByGM(endpoint, payload, apiKey, onDelta);
+      } catch (gmError) {
+        // 只有 GM 也是传输层失败（onerror/ontimeout）才叫"双通道都连不上"。
+        // GM 若拿到了服务端响应——哪怕是 SSE 里的 error 事件——说明链路是通的，
+        // 问题在请求内容或服务端，原样呈现即可；包装成"无法连接"会把用户引向错误方向。
+        throw describeRequestError(gmError, endpoint, !!gmError?.transport);
+      }
+    }
   }
 
   async function transcribeVideoAudio(video, track, selection, hooks = {}) {

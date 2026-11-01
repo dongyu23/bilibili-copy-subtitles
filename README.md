@@ -1,7 +1,7 @@
 # Bilibili / YouTube / 视频号 / 通义听悟 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.6.0-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.6.1-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube**、**微信视频号** 和 **通义听悟**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字；通义听悟则在转写详情页一键复制整篇转写稿。
@@ -74,7 +74,7 @@ YouTube 链路通过 YouTube 官方的 InnerTube 播放器接口读取字幕轨�
 - 音频下载失败自动换取新的播放数据地址重试，并依次尝试备用 CDN 地址
 - 字幕/识别结果缓存留存时间可配置（会话 / 1 小时 / 24 小时 / 7 天 / 30 天 / 永久）
 - 页面按钮支持显示或隐藏
-- 原生请求失败时自动尝试油猴跨域请求
+- 原生请求失败时自动尝试油猴跨域请求；全部请求点均有兜底，底层网络错误分类为可操作的中文提示（区分代理/扩展/@connect/超时，服务端错误不会被误报成连接问题）
 - 支持 Tampermonkey 自动更新
 
 ## 字幕选择规则
@@ -317,6 +317,18 @@ https://tingwu.aliyun.com/*
 
 确认脚本管理器已经授予对应站点的跨域访问权限（B 站为 `api.bilibili.com` 和 `aisubtitle.hdslb.com`）。升级或重新安装脚本时，Tampermonkey 可能会再次显示权限确认页面。
 
+### 提示“无法连接 xxx”
+
+从 v2.6.1 起，底层网络错误会带上域名和性质，不再是一句没有信息量的 `Failed to fetch`。提示里已列出最可能的三种成因，按顺序排查即可：
+
+1. **代理/VPN**：把该域名路由到了失效节点。关闭代理，或把提示里的域名设为直连。
+2. **浏览器扩展**：广告拦截/隐私类扩展阻止了请求。用无痕窗口（禁用扩展）试一次即可区分。
+3. **`@connect` 未授权**：Tampermonkey → 管理面板 → 该脚本，确认提示里的域名在允许列表内。
+
+若提示写的是「浏览器与油猴两条请求通道都失败了」，说明两条独立通道都不通，基本可以确定是网络层或权限问题，与 Key 无关。
+
+反之，如果提示是「xxx 请求失败：<服务端原文>」，说明链路是通的、服务端返回了错误（例如 StepFun 的 `audio.data or audio.url is required`、配额不足等），按服务端原文处理即可——这类错误不会被误报成连接问题。
+
 ### 复制字幕时提示“字幕下载被拒绝”
 
 字幕直链带有效期，页面开太久或切过 P 之后直链会过期，CDN 返回 403。脚本会自动重新拉取字幕列表换取新直链重试，多数情况点击一次即可成功，无需手动刷新。如果仍提示被拒绝，按提示操作：刷新视频页面后重试；使用代理时确认 `*.hdslb.com` 等字幕 CDN 域名走直连而非海外节点（海外/机房节点常被 CDN 拒绝）。
@@ -471,6 +483,20 @@ https://tingwu.aliyun.com/*
 - **真实登录态全链路自验证**（真实 Chrome + 真实账号 + 真实转写，非 mock）：登录态校验通过 → 进入转写页 → 按钮挂载 → 点击 → 真实 `getTransResult` 返回 `code=0`、`result` 1,276,842 字节 → toast「已复制通义听悟转写，共 41483 个字符」→ 剪贴板 41,483 字符，按钮状态正常恢复。
 - **交叉核对**：该转写接口自报 `wordCount=41265`、219 个段落、时长 6853 秒；脚本解码输出 41,483 字符（比值 1.01，中文转写的正常比例），1.28MB 数据解码耗时 11ms；剪贴板首尾均为连贯的课程内容，无时间戳、无 JSON 字段残留。
 - **回归**：`node --check` 通过；相对 v2.5.2 为纯增量（删除 0 行、新增 169 行），原有函数签名集合零差异，B 站 / YouTube / 视频号 / StepFun 链路未受影响。
+
+`2.6.1`（请求层加固：兜底 + 错误分类）：
+
+- **动机**：真实用户反馈「明明配了 Key 却报 failed to fetch」。排查确认 `Failed to fetch` 是浏览器网络层的 `TypeError`，与 Key 无关；而全脚本 7 处 `fetch()` 中只有 StepFun 语音识别那一处没有 try/catch、没有油猴兜底、没有错误包装，底层错误原样冒到 toast，用户拿不到任何可定位信息。
+- **统一错误分类**：新增 `describeRequestError()`，把 `TypeError` 按性质翻译成可操作提示——区分「代理/VPN 路由失效」「浏览器扩展拦截」「`@connect` 未授权」「超时」，并带上域名。同时认 Firefox 的 `NetworkError`、Safari 的 `load failed` 等措辞。带了 HTTP 状态码的以状态码为准（403 换链重试依赖 `error.status`，不能改写成"无法连接"）。
+- **双通道兜底**：`transcribeAudioChunk` 拆成「浏览器流式读取」与「油猴整段返回」两条路径，共用同一个 SSE 增量解析器（`createSseParser`），避免两条路径各写一遍解析逻辑导致行为漂移。浏览器 `fetch` 失败才回退油猴；HTTP 4xx/5xx 说明请求已到达服务端，换通道无意义，直接抛出。
+- **覆盖全部请求点**：修复后全脚本 8 处 `fetch()` 均有兜底。顺带修了三处同类问题——`requestJsonPost` 原本完全没有兜底、`gmRangeRequest` 与 `downloadByFetch` 的页面兜底未做错误分类。
+- **修掉一个既有 bug**：`requestJsonByGM` 的 `onerror` 分支从未给 error 挂 `.status`，导致走油猴通道时 403 换链重试失效。现三种形态（浏览器 403 / 油猴 onload 403 / 油猴 onerror 403）均已验证透传。
+- **不误报服务端错误**：仅当油猴通道也是传输层失败（`onerror`/`ontimeout`，打 `transport` 标记）才判定为「双通道都连不上」；油猴若拿到了服务端响应（哪怕是 SSE 里的 error 事件），说明链路通畅，原样呈现服务端消息。
+- **单测**：46 组断言，覆盖错误分类各分支、SSE 解析（完整块/跨块/逐字符流式/残块/error 事件/坏 JSON）、双路行为（fetch 成功不调 GM、fetch 失败 GM 兜底、双通道失败、HTTP 401 不换通道、无 GM 时仍分类、请求体字段、多片流式进度、双路解析一致、服务端错误不误报）。
+- **真实链路回归**（真实 Chrome + 真实账号 + 真实数据，非 mock）：
+  - 通义听悟：按钮挂载 → 点击 → 转写 41,483 字符；
+  - B 站无字幕 ASR：点击 → 下载音频 → StepFun 识别 → 44,787 字符 / 31.0 秒，内容与课程一致；
+  - **回归过程中浏览器真实抛出了 CORS 拦截**（`Access-Control-Allow-Origin` 头含多值，与用户反馈的间歇性失败同源），新的油猴兜底自动接住并正常完成识别——这正是本次修复要解决的实际场景。
 
 ## 开发检查
 
