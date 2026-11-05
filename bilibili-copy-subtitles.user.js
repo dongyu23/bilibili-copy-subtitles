@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。
+// @version      2.7.1
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -837,10 +837,14 @@
     }
   }
 
+  // 字幕相关缓存前缀：meta（字幕列表）+ lines（原始字幕行）+ body（识别结果/视频号转写）。
+  const CACHE_PREFIXES = [META_CACHE_PREFIX, SUBTITLE_LINES_PREFIX, BODY_CACHE_PREFIX];
+  const isCacheKey = key => CACHE_PREFIXES.some(prefix => key.startsWith(prefix));
+
   function listCacheKeys() {
     if (typeof GM_listValues !== 'function') return [];
     try {
-      return GM_listValues().filter(key => key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX));
+      return GM_listValues().filter(isCacheKey);
     } catch (_) {
       return [];
     }
@@ -850,9 +854,7 @@
     memoryCache.clear();
     try {
       for (const key of Object.keys(sessionStorage)) {
-        if (key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX)) {
-          sessionStorage.removeItem(key);
-        }
+        if (isCacheKey(key)) sessionStorage.removeItem(key);
       }
     } catch (_) {
       // 忽略存储异常
@@ -1364,8 +1366,11 @@
   }
 
   // 数据层：复用既有字幕链路，结果按 视频:分P:语言 缓存（换 P 自然隔离）。
-  async function loadSubtitleLinesForFind() {
-    const video = resolveCurrentVideo();
+  // 字幕行的唯一缓存源。整篇、章节、检索三条链路都从这里取原始 [{from,to,content}]，
+  // 各自在内存里派生——避免"整篇一份字符串 + 每个章节组合各一份字符串"的重复占用，
+  // 也避免整篇取过之后章节还要再拉一次。ASR 结果没有时间戳，仍走 BODY_CACHE_PREFIX。
+  async function loadSubtitleLines(videoArg) {
+    const video = videoArg || resolveCurrentVideo();
     const videoKey = videoCacheKey(video);
     const lang = document.getElementById(SELECT_ID)?.value || 'auto';
     const cacheKey = `${videoKey}:${lang}`;
@@ -1405,6 +1410,9 @@
       .q:focus{border-color:#00aeec}
       .count{font-size:12px;color:#888;flex:none;white-space:nowrap}
       .count b{color:#00aeec;font-weight:600}
+      .mode{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:5px 10px;font-size:12px;color:#555;cursor:pointer;flex:none;white-space:nowrap}
+      .mode:hover{border-color:#00aeec;color:#00aeec}
+      .mode.on{background:#00aeec;border-color:#00aeec;color:#fff}
       .x{border:none;background:none;color:#999;cursor:pointer;font-size:18px;line-height:1;padding:2px 6px;flex:none}
       .x:hover{color:#333}
       .list{overflow-y:auto;padding:6px 0;flex:1;min-height:60px}
@@ -1442,12 +1450,18 @@
     input.value = subtitleFindLastQuery;
     const count = document.createElement('span');
     count.className = 'count';
+    // 「全部字幕」模式开关：不输入关键字也能逐条点字幕跳转
+    const allBtn = document.createElement('button');
+    allBtn.className = 'mode';
+    allBtn.type = 'button';
+    allBtn.textContent = '全部字幕';
+    allBtn.title = '列出全部分P字幕，点击任意一条跳转到对应时间点';
     const closeBtn = document.createElement('button');
     closeBtn.className = 'x';
     closeBtn.type = 'button';
     closeBtn.textContent = '✕';
     closeBtn.title = '关闭（Esc）';
-    top.append(input, count, closeBtn);
+    top.append(input, allBtn, count, closeBtn);
 
     const list = document.createElement('div');
     list.className = 'list';
@@ -1481,6 +1495,8 @@
     let cur = -1;              // 当前命中下标
     let loadFailed = null;
     let asrBusy = false;
+    // 'hits' = 命中列表；'all' = 全量字幕列表（不检索也能点着跳转）
+    let mode = 'hits';
 
     const escapeHtml = s => String(s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1503,7 +1519,58 @@
       return box;
     };
 
+    // 全量字幕列表：不输入关键字也能逐条点击跳转。
+    // 长视频可能上千条，超出上限时只渲染当前窗口附近的一段，避免一次性建太多 DOM。
+    const ALL_ROWS_WINDOW = 400;
+    const renderAll = () => {
+      const total = lines.length;
+      count.textContent = `全部 ${total} 条字幕`;
+      prevBtn.disabled = nextBtn.disabled = true;
+      if (!total) { renderEmpty('没有可显示的字幕'); return; }
+
+      const buildRow = i => {
+        const item = lines[i];
+        const row = document.createElement('div');
+        row.className = 'row';
+        const t = document.createElement('span');
+        t.className = 't';
+        t.textContent = fmtClock((Number(item.from) || 0) * 1000);
+        const txt = document.createElement('span');
+        txt.className = 'txt';
+        txt.textContent = String(item.content ?? '');
+        row.append(t, txt);
+        row.addEventListener('click', () => seekPlayer(Number(item.from) || 0));
+        return row;
+      };
+
+      if (total <= ALL_ROWS_WINDOW) {
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < total; i++) frag.appendChild(buildRow(i));
+        list.replaceChildren(frag);
+        return;
+      }
+
+      // 长列表：先渲染前 ALL_ROWS_WINDOW 条，滚动到接近底部时再续批
+      let rendered = 0;
+      const appendBatch = () => {
+        const frag = document.createDocumentFragment();
+        const end = Math.min(total, rendered + ALL_ROWS_WINDOW);
+        for (let i = rendered; i < end; i++) frag.appendChild(buildRow(i));
+        list.appendChild(frag);
+        rendered = end;
+      };
+      list.replaceChildren();
+      appendBatch();
+      list.onscroll = () => {
+        if (rendered >= total) { list.onscroll = null; return; }
+        if (list.scrollTop + list.clientHeight >= list.scrollHeight - 240) appendBatch();
+      };
+    };
+
     const render = () => {
+      allBtn.classList.toggle('on', mode === 'all');
+      allBtn.textContent = mode === 'all' ? '返回命中' : '全部字幕';
+      list.onscroll = null;
       if (loadFailed) {
         const box = renderEmpty(loadFailed);
         return;
@@ -1535,6 +1602,8 @@
         prevBtn.disabled = nextBtn.disabled = true;
         return;
       }
+      // 全量模式：忽略检索词，直接列全部字幕
+      if (mode === 'all') { renderAll(); return; }
       if (!input.value.trim()) {
         renderEmpty('输入关键字开始检索字幕');
         count.textContent = `${lines.length} 条字幕`;
@@ -1644,8 +1713,15 @@
     // ---- 事件 ----
     let debounce = 0;
     input.addEventListener('input', () => {
+      // 一输入就回到命中模式，避免停在"全部字幕"里却看不到筛选效果
+      if (mode === 'all') { mode = 'hits'; }
       window.clearTimeout(debounce);
       debounce = window.setTimeout(runSearch, 120);
+    });
+    allBtn.addEventListener('click', () => {
+      mode = mode === 'all' ? 'hits' : 'all';
+      if (mode === 'hits' && input.value.trim()) runSearch();
+      else render();
     });
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); go(cur + (e.shiftKey ? -1 : 1), true); }
@@ -1677,7 +1753,7 @@
 
     // ---- 加载字幕 ----
     render();
-    loadSubtitleLinesForFind()
+    loadSubtitleLines()
       .then(res => {
         lines = res ? res.lines : [];
         render();
@@ -1926,7 +2002,7 @@
       const count = listCacheKeys().length;
       const sessionCount = (() => {
         try {
-          return Object.keys(sessionStorage).filter(key => key.startsWith(META_CACHE_PREFIX) || key.startsWith(BODY_CACHE_PREFIX)).length;
+          return Object.keys(sessionStorage).filter(isCacheKey).length;
         } catch (_) {
           return 0;
         }
@@ -3773,9 +3849,6 @@
           : `已通过语音识别复制，共 ${text.length} 个字符 · 用时 ${formatElapsed(elapsedMs)}`);
         return;
       }
-      const url = subtitle.subtitle_url.startsWith('//')
-        ? `https:${subtitle.subtitle_url}`
-        : subtitle.subtitle_url;
       // 有字幕时也支持按章节复制：B 站视频带章节（≥2 个）时弹面板，默认整篇不分章，行为与之前一致。
       const chapters = await loadVideoChapters(video, videoKey);
       let selection = { mode: 'full' };
@@ -3788,19 +3861,13 @@
         if (!picked) return; // 用户取消
         selection = picked;
       }
-      const selHash = selectionHash(selection);
-      // 字幕 CDN 的跨域响应不接受携带 Cookie 的凭据请求。
-      const bodyCacheKey = `${videoKey}:${subtitle.lan || url}`;
-      // 章节选择单独占一个缓存键，整篇与各章节组合互不影响。
-      const cacheKey = selHash === 'full' ? bodyCacheKey : `${bodyCacheKey}:${selHash}`;
-      let text = readCache(BODY_CACHE_PREFIX, cacheKey);
-      if (!text) {
-        const body = await fetchSubtitleBodyFresh(video, subtitle, selectedLanguage);
-        text = selection.mode === 'full'
-          ? normalizeSubtitle(body)
-          : buildChapterSubtitleText(body, chapters, selection.ranges);
-        if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
-      }
+      // 整篇与章节都从同一份原始字幕行派生，不再为每个章节组合各存一份字符串：
+      // 既避免重复占用，也让"整篇取过一次"之后章节直接可用，无需再拉一次。
+      const loaded = await loadSubtitleLines(video);
+      const lines = loaded ? loaded.lines : [];
+      const text = selection.mode === 'full'
+        ? normalizeSubtitle(lines)
+        : buildChapterSubtitleText(lines, chapters, selection.ranges);
       if (videoCacheKey(resolveCurrentVideo()) !== videoKey) {
         throw new Error('检测到页面已切换视频，已停止复制旧字幕');
       }
@@ -4197,31 +4264,6 @@
 
   // 跨集字幕 403 换链：与 fetchSubtitleBodyFresh 同思路，但刷新通道走
   // fetchEpisodeSubtitleMeta（WBI 优先），不依赖播放器捕获链接，避免跨集场景空等。
-  async function fetchEpisodeSubtitleBodyFresh(video, subtitle, selectedLanguage) {
-    const hint = '字幕下载被拒绝（HTTP 403）：直链可能已过期，请刷新页面后重试';
-    try {
-      return await fetchSubtitleBody(video, subtitle);
-    } catch (error) {
-      if (error?.status !== 403) throw error;
-      console.warn('[复制字幕] 跨集字幕直链被拒（HTTP 403），尝试换取新直链', error);
-      let fresh = null;
-      try {
-        const subtitles = await fetchEpisodeSubtitleMeta(video, { force: true });
-        fresh = (subtitle.lan && subtitles.find(s => s.lan === subtitle.lan))
-          || chooseSubtitle(subtitles, selectedLanguage);
-      } catch (metaError) {
-        console.warn('[复制字幕] 跨集刷新字幕列表失败', metaError);
-      }
-      if (!fresh?.subtitle_url || fresh.subtitle_url === subtitle.subtitle_url) throw new Error(hint);
-      try {
-        return await fetchSubtitleBody(video, fresh);
-      } catch (retryError) {
-        if (retryError?.status !== 403) throw retryError;
-        throw new Error(hint);
-      }
-    }
-  }
-
   // 选集选择面板：与章节面板同一套交互（全部选集 ⇄ 勾选集数），另加语言偏好下拉。
   // 语言选项来自首个分P的字幕列表；单集缺失所选语言时逐集自动回退（中文优先）。
   function showEpisodePanel(options) {
@@ -4488,13 +4530,9 @@
         const subtitle = chooseSubtitle(subtitles, language);
         let text = '';
         if (subtitle?.subtitle_url) {
-          const cacheKey = `${videoCacheKey(video)}:${subtitle.lan || subtitle.subtitle_url}`;
-          text = readCache(BODY_CACHE_PREFIX, cacheKey);
-          if (!text) {
-            const body = await fetchEpisodeSubtitleBodyFresh(video, subtitle, language);
-            text = normalizeSubtitle(body);
-            if (text) writeCache(BODY_CACHE_PREFIX, cacheKey, text);
-          }
+          // 与单视频同一条缓存源：跨集复制过某一集，该集在主按钮/检索里也直接可用。
+          const loaded = await loadSubtitleLines(video);
+          text = loaded ? normalizeSubtitle(loaded.lines) : '';
         } else {
           // 该集没有字幕：走单视频同款语音识别兜底，结果按集缓存。
           ui.note(`P${pageInfo.page} 无字幕，转语音识别`);
