@@ -1,7 +1,7 @@
 # Bilibili / YouTube / 视频号 / 通义听悟 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.6.1-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.7.0-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube**、**微信视频号** 和 **通义听悟**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字；通义听悟则在转写详情页一键复制整篇转写稿。
@@ -66,6 +66,7 @@ YouTube 链路通过 YouTube 官方的 InnerTube 播放器接口读取字幕轨�
 - 视频号转文字：粘贴分享链接即自动完成「解析 → 下载 → 语音识别 → 剪贴板」
 - 上传转文字：选择本地视频/音频文件，经同一套 StepFun 语音识别转成文字
 - 通义听悟转写：在转写详情页一键复制整篇转写稿，详见下文「通义听悟转文字」
+- 字幕检索：B 站视频页按 Ctrl/Cmd+F 检索当前分P的字幕，命中项带时间点、可上下切换并跳转播放进度，详见下文「字幕检索（Ctrl+F）」
 - 语音识别 Key 图形化配置面板，支持一键测试连接
 - 元宝 Cookie 支持一键读取与登录态测试，解析/取直链失败时给出可操作的错误原因
 - 设置面板集中管理：Key、识别端点、识别语言、调试开关、元宝 Cookie、缓存留存时间
@@ -231,7 +232,52 @@ B 站视频带有章节信息（进度条上可见的分段，且不少于 2 个
 
 按钮只在转写详情页出现，听悟的首页、列表页等其它页面不会挂。听悟是单页应用，站内跳转后按钮会自动重新挂载。
 
-### 支持的页面
+### 字幕检索（Ctrl+F）
+
+在 B 站视频页按 `Ctrl+F`（macOS 是 `Cmd+F`）弹出检索框，直接索引当前分P的字幕内容——浏览器原生查找只能搜页面文本，搜不到字幕里说了什么。
+
+### 使用方式
+
+1. 打开任意带字幕的 B 站视频页（`/video/`、`/list/`、`/bangumi/play/`、`/medialist/play/`）。
+2. 按 `Ctrl+F` / `Cmd+F`，或在 Tampermonkey 菜单执行「字幕检索（Ctrl+F）」。
+3. 输入关键字，面板显示命中总数与每条命中的时间点。
+4. 用 `Enter` / `↓` 下一个，`Shift+Enter` / `↑` 上一个（循环切换），也可以直接点某一条。
+5. 每次切换都会把播放进度跳到该条字幕的时间点；Esc 或点击空白处关闭。
+
+命中项会高亮关键词，当前项自动滚入可见区。检索词在关闭面板后仍会保留，下次按 `Ctrl+F` 直接接着上次的结果看。
+
+#### 支持的页面
+
+```text
+https://www.bilibili.com/video/*
+https://www.bilibili.com/list/*
+https://www.bilibili.com/bangumi/play/*
+https://www.bilibili.com/medialist/play/*
+```
+
+只在上述视频类页面接管快捷键，B 站首页、空间页等地方不会劫持 `Ctrl+F`。
+
+### 工作方式
+
+- 数据复用既有字幕链路（`resolveCurrentVideo` → `fetchSubtitleMeta` → `chooseSubtitle` → `fetchSubtitleBodyFresh`），不新增网络请求，也不需要额外登录。
+- 命中列表按 `视频:分P:语言` 缓存（`video-subtitle-lines-v1:` 前缀），与复制链路各自独立；换分P后检索范围自动跟着切。
+- 一行字幕内多次出现算多个命中，计数准确，上下切换能逐个走完。
+- 跳转只改 `<video>` 的 `currentTime`，**不会擅自开始播放**，不改变你当前的播放/暂停状态。
+- 面板用 Shadow DOM 承载，页面自身 CSS 无法穿透。
+
+### 没有字幕时
+
+面板会说明「当前视频没有字幕」。若已配置 StepFun API Key，会额外提供一个「语音识别后检索」按钮——点击后走既有的语音识别链路生成文字（有费用确认弹窗），识别完成即可检索；识别结果按句切分并均匀映射到音轨时间点，因此跳转是近似位置。未配置 Key 则提示去设置面板填写。
+
+### 排障
+
+| 提示 | 原因 | 处理 |
+| --- | --- | --- |
+| 未能从地址解析出转写 ID | 不在转写详情页 | 从「我的记录」或分享链接进入详情页 |
+| 未解析出转写文字 | 接口结构变更 | 看控制台 `[复制字幕][检索]` 打出的真实字段 |
+| 提示「无法连接 xxx」 | 代理/扩展/`@connect` | 见上方「提示"无法连接 xxx"」一节的三种排查 |
+
+## 支持的页面
 
 ```text
 https://tingwu.aliyun.com/doc/transcripts/*        自己的记录
@@ -497,6 +543,23 @@ https://tingwu.aliyun.com/*
   - 通义听悟：按钮挂载 → 点击 → 转写 41,483 字符；
   - B 站无字幕 ASR：点击 → 下载音频 → StepFun 识别 → 44,787 字符 / 31.0 秒，内容与课程一致；
   - **回归过程中浏览器真实抛出了 CORS 拦截**（`Access-Control-Allow-Origin` 头含多值，与用户反馈的间歇性失败同源），新的油猴兜底自动接住并正常完成识别——这正是本次修复要解决的实际场景。
+
+`2.7.0`（字幕检索 Ctrl+F + 字幕直链换链加固）：
+
+- **功能**：B 站视频页按 `Ctrl+F`/`Cmd+F` 弹出检索框（capture 阶段注册，抢在播放器快捷键之前），索引当前分P字幕，命中项带时间点与关键词高亮，`Enter`/`↓` 下一个、`Shift+Enter`/`↑` 上一个（循环），点击命中行或切换时把 `<video>` 的 `currentTime` 跳到该条字幕时间点——只改进度，不擅自播放。检索词跨开关保留。面板为 Shadow DOM，与章节/跨集面板同构。
+- **数据复用**：走既有链路 `resolveCurrentVideo` → `fetchSubtitleMeta` → `chooseSubtitle` → `fetchSubtitleBodyFresh`，不新增请求、不需额外登录；命中列表按 `视频:分P:语言` 存入新前缀 `video-subtitle-lines-v1:`（`BODY_CACHE_PREFIX` 存的是丢时间戳的拼接字符串，不能用于跳转），换分P 自然隔离。
+- **无字幕时**：提示 + 可选的「语音识别后检索」按钮（沿用既有 ASR 链路与费用确认，识别结果按句切分并均匀映射到音轨时间点，跳转为近似位置），不自动触发、无意外计费。
+- **顺带修掉的既有缺陷**：`fetchSubtitleBodyFresh` 原先只在 HTTP 403 时换链，而字幕直链的 `auth_key` 过期后 CDN 也可能直接断连（传输层失败），此时不会换链。现改为 403 与传输层失败都换新直链重试。该缺陷在真实回归中被复现：meta 缓存里的旧直链导致复制失败。
+- **单测**：38 组断言（`subtitle-find.test.js`），覆盖匹配构建的各边界与 `arrowKeyNavigates` 光标守卫三态——后者在实现后按真实按键实测发现 shadow 边界会 retarget `e.target`，改为不依赖 `e.target` 后移除。
+- **真实浏览器回归**（ZCode 内置浏览器 IAB + 真实登录态 + 真实字幕，非 mock）：
+  - `Ctrl+F` 真实按键弹出面板，浏览器原生查找栏不出现；
+  - 检索「中值」得 66 条命中，计数/高亮/时间片正确（首条 `0:01`）；
+  - `Enter`/`↓`/`↑`/`Shift+Enter` 逐项切换，播放进度真实跳转（如 106s → 5.9s → 6.5s → 6.4s → 0.8s），循环包裹正常（首项按 ↑ 跳到末项 6869.5s）；
+  - Esc 关闭、重开检索词与结果均恢复、不重复开面板；
+  - 无命中时禁用导航按钮并提示；
+  - 切到 P3 后检索范围随之切换（P2 182 条字幕 → P3 2356 条，cid 亦不同）；
+  - 既有功能回归：「复制全部字幕」正常（P3 复制 30446 字符），章节面板、跨集复制不受影响。
+- **方向键交互的取舍**：最初实现为"焦点在输入框且光标未贴边时方向键留给光标移动"，真实按键实测发现 shadow 边界会 retarget `e.target` 导致守卫失效；修正后却发现打完字光标在末尾时 `↑` 会被光标吃掉、无法往回切，与"上下切换"的直觉相悖。最终改为面板打开期间 `↑↓` 一律切换命中项，光标位置用 Home/End/点击调整——行为可预期，且 `Enter`/`Shift+Enter` 仍是文档化的主路径。
 
 ## 开发检查
 

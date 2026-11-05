@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.6.1
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。
+// @version      2.7.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -56,6 +56,12 @@
   // v6 起缓存带留存时间；仅本次会话的缓存走 sessionStorage，跨会话走 Tampermonkey 存储。
   const META_CACHE_PREFIX = 'video-subtitles-meta-v6:';
   const BODY_CACHE_PREFIX = 'video-subtitles-body-v6:';
+  // 字幕检索专用缓存：BODY_CACHE_PREFIX 存的是 normalizeSubtitle 之后的拼接字符串，
+  // 时间戳已被丢弃，无法用于"跳转到第几分几秒"，所以另开一份存原始 [{from,to,content}]。
+  const SUBTITLE_LINES_PREFIX = 'video-subtitle-lines-v1:';
+  const FIND_PANEL_HOST_ID = 'bili-subtitle-find-host';
+  // 上次的检索词：关掉面板再按 Ctrl+F 时恢复，与浏览器原生查找栏的体验一致。
+  let subtitleFindLastQuery = '';
   const memoryCache = new Map();
   const playerApiUrls = [];
   const playerPlayApiUrls = [];
@@ -1307,7 +1313,384 @@
     });
   }
 
-  // ===== Fork：工作标签页（重活隔离执行，崩溃也碰不到视频页的存储）=====
+  // ===== 字幕检索（Ctrl+F）=====
+  // 在 B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P的字幕，
+  // 命中项带时间点，可上下切换并跳转播放进度。
+
+  // 纯函数：把字幕行拆成命中列表。一行内多次出现算多个命中，
+  // 这样计数准确，上下切换也能逐个走完同一行里的所有出现位置。
+  function buildSubtitleMatches(lines, query) {
+    const q = String(query == null ? '' : query).trim();
+    if (!q || !Array.isArray(lines)) return [];
+    const needle = q.toLowerCase();
+    const matches = [];
+    for (let i = 0; i < lines.length; i++) {
+      const item = lines[i];
+      if (!item || typeof item !== 'object') continue;
+      const content = String(item.content ?? '');
+      if (!content) continue;
+      const haystack = content.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const at = haystack.indexOf(needle, from);
+        if (at < 0) break;
+        matches.push({
+          index: i,
+          from: Number(item.from) || 0,
+          to: Number(item.to) || 0,
+          content,
+          matchStart: at,
+          matchLength: needle.length,
+        });
+        from = at + Math.max(1, needle.length);
+      }
+    }
+    return matches;
+  }
+
+  // 跳转播放进度。脚本此前完全不接触 <video>，选择器做防御式多路兜底；
+  // 只改 currentTime，不调用 play()——不擅自改变用户的播放/暂停状态。
+  function seekPlayer(seconds) {
+    const el = document.querySelector(
+      '.bpx-player-container video, #bilibili-player video, .bilibili-player video, bwp-video, video'
+    );
+    if (!el || typeof el.currentTime !== 'number') return false;
+    try {
+      el.currentTime = Math.max(0, Number(seconds) || 0);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 数据层：复用既有字幕链路，结果按 视频:分P:语言 缓存（换 P 自然隔离）。
+  async function loadSubtitleLinesForFind() {
+    const video = resolveCurrentVideo();
+    const videoKey = videoCacheKey(video);
+    const lang = document.getElementById(SELECT_ID)?.value || 'auto';
+    const cacheKey = `${videoKey}:${lang}`;
+    let lines = readCache(SUBTITLE_LINES_PREFIX, cacheKey);
+    if (!lines) {
+      const subtitles = await fetchSubtitleMeta(video);
+      const subtitle = chooseSubtitle(subtitles, lang);
+      if (!subtitle?.subtitle_url) return null;
+      lines = await fetchSubtitleBodyFresh(video, subtitle, lang);
+      if (Array.isArray(lines) && lines.length) {
+        writeCache(SUBTITLE_LINES_PREFIX, cacheKey, lines);
+      }
+    }
+    return { lines: Array.isArray(lines) ? lines : [], lang, videoKey };
+  }
+
+  // 面板。Shadow DOM 骨架沿用 showChapterPanel，避免被页面 CSS 穿透。
+  function openSubtitleFind() {
+    if (document.getElementById(FIND_PANEL_HOST_ID)) {
+      // 已打开则聚焦输入框并全选，不开第二个
+      const host = document.getElementById(FIND_PANEL_HOST_ID);
+      const input = host.shadowRoot?.querySelector('.q');
+      if (input) { input.focus(); input.select(); }
+      return;
+    }
+
+    const host = document.createElement('div');
+    host.id = FIND_PANEL_HOST_ID;
+    host.style.cssText = 'position:fixed;inset:0;z-index:2147483646';
+    const root = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = `
+      .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding-top:9vh;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:#222}
+      .panel{background:#fff;color:#222;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min(560px,92vw);max-height:74vh;display:flex;flex-direction:column}
+      .top{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid #eee}
+      .q{flex:1;border:1px solid #d9d9d9;border-radius:6px;padding:8px 10px;font-size:14px;color:#222;outline:none;min-width:0}
+      .q:focus{border-color:#00aeec}
+      .count{font-size:12px;color:#888;flex:none;white-space:nowrap}
+      .count b{color:#00aeec;font-weight:600}
+      .x{border:none;background:none;color:#999;cursor:pointer;font-size:18px;line-height:1;padding:2px 6px;flex:none}
+      .x:hover{color:#333}
+      .list{overflow-y:auto;padding:6px 0;flex:1;min-height:60px}
+      .row{display:flex;align-items:baseline;gap:10px;padding:8px 14px;cursor:pointer;color:#222;font-size:14px}
+      .row:hover{background:#f2f3f5}
+      .row.cur{background:#e6f7ff}
+      .t{flex:none;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#00aeec;background:#f0faff;border-radius:4px;padding:2px 6px}
+      .txt{flex:1;word-break:break-word}
+      .txt mark{background:#ffe58f;color:inherit;border-radius:2px;padding:0 1px}
+      .row.cur .txt mark{background:#ffa39e}
+      .empty{padding:26px 16px;text-align:center;color:#888;font-size:13px;line-height:1.7}
+      .empty .asr{margin-top:12px;border:1px solid #00aeec;background:#00aeec;color:#fff;border-radius:6px;padding:7px 16px;cursor:pointer;font-size:13px}
+      .empty .asr[disabled]{opacity:.55;cursor:default}
+      .foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid #eee}
+      .nav{border:1px solid #d9d9d9;background:#fff;border-radius:6px;width:30px;height:28px;cursor:pointer;font-size:13px;color:#222;flex:none}
+      .nav:hover:not([disabled]){border-color:#00aeec;color:#00aeec}
+      .nav[disabled]{opacity:.4;cursor:default}
+      .tip{font-size:12px;color:#999;flex:1}
+    `;
+    root.appendChild(style);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+
+    const top = document.createElement('div');
+    top.className = 'top';
+    const input = document.createElement('input');
+    input.className = 'q';
+    input.type = 'text';
+    input.placeholder = '检索字幕内容…';
+    input.spellcheck = false;
+    // 恢复上次的检索词，重开后直接接着看
+    input.value = subtitleFindLastQuery;
+    const count = document.createElement('span');
+    count.className = 'count';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'x';
+    closeBtn.type = 'button';
+    closeBtn.textContent = '✕';
+    closeBtn.title = '关闭（Esc）';
+    top.append(input, count, closeBtn);
+
+    const list = document.createElement('div');
+    list.className = 'list';
+
+    const foot = document.createElement('div');
+    foot.className = 'foot';
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'nav';
+    prevBtn.type = 'button';
+    prevBtn.textContent = '↑';
+    prevBtn.title = '上一个（Shift+Enter）';
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'nav';
+    nextBtn.type = 'button';
+    nextBtn.textContent = '↓';
+    nextBtn.title = '下一个（Enter）';
+    const tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.textContent = 'Enter/↓ 下一个 · Shift+Enter/↑ 上一个 · Esc 关闭';
+    foot.append(prevBtn, nextBtn, tip);
+
+    panel.append(top, list, foot);
+    overlay.appendChild(panel);
+    root.appendChild(overlay);
+    document.body.appendChild(host);
+    input.focus();
+
+    // ---- 状态 ----
+    let lines = null;          // null = 尚未加载
+    let matches = [];
+    let cur = -1;              // 当前命中下标
+    let loadFailed = null;
+    let asrBusy = false;
+
+    const escapeHtml = s => String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+    // 把一行文本按命中位置切片，当前命中包 <mark>，其余命中包 <i> 轻标记
+    const renderLine = (m, isCur) => {
+      const before = escapeHtml(m.content.slice(0, m.matchStart));
+      const hit = escapeHtml(m.content.slice(m.matchStart, m.matchStart + m.matchLength));
+      const after = escapeHtml(m.content.slice(m.matchStart + m.matchLength));
+      return `${before}<mark>${hit}</mark>${after}`;
+    };
+
+    const renderEmpty = text => {
+      list.replaceChildren();
+      const box = document.createElement('div');
+      box.className = 'empty';
+      box.textContent = text;
+      list.appendChild(box);
+      return box;
+    };
+
+    const render = () => {
+      if (loadFailed) {
+        const box = renderEmpty(loadFailed);
+        return;
+      }
+      if (lines === null) {
+        renderEmpty('正在读取字幕…');
+        count.textContent = '';
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+      if (!lines.length) {
+        // 无字幕：给说明 + 可选的语音识别入口（不自动触发、不产生意外计费）
+        const box = renderEmpty('当前视频没有字幕，无法检索。');
+        if (getAsrApiKey()) {
+          const btn = document.createElement('button');
+          btn.className = 'asr';
+          btn.type = 'button';
+          btn.textContent = asrBusy ? '识别中…' : '语音识别后检索';
+          btn.disabled = asrBusy;
+          btn.addEventListener('click', () => startAsrThenFind());
+          box.appendChild(btn);
+        } else {
+          const p = document.createElement('div');
+          p.style.marginTop = '8px';
+          p.textContent = '配置 StepFun API Key 后可语音识别生成文字再检索。';
+          box.appendChild(p);
+        }
+        count.textContent = '';
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+      if (!input.value.trim()) {
+        renderEmpty('输入关键字开始检索字幕');
+        count.textContent = `${lines.length} 条字幕`;
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+      if (!matches.length) {
+        renderEmpty('没有匹配的字幕');
+        count.textContent = '0 命中';
+        prevBtn.disabled = nextBtn.disabled = true;
+        return;
+      }
+
+      count.textContent = '';
+      count.replaceChildren();
+      const b = document.createElement('b');
+      b.textContent = String(cur + 1);
+      count.append(b, document.createTextNode(` / ${matches.length} 命中`));
+
+      const frag = document.createDocumentFragment();
+      matches.forEach((m, i) => {
+        const row = document.createElement('div');
+        row.className = 'row' + (i === cur ? ' cur' : '');
+        const t = document.createElement('span');
+        t.className = 't';
+        t.textContent = fmtClock(m.from * 1000);
+        const txt = document.createElement('span');
+        txt.className = 'txt';
+        txt.innerHTML = renderLine(m, i === cur);
+        row.append(t, txt);
+        row.addEventListener('click', () => { go(i, true); });
+        frag.appendChild(row);
+      });
+      list.replaceChildren(frag);
+      prevBtn.disabled = nextBtn.disabled = matches.length < 2;
+      const curRow = list.children[cur];
+      if (curRow) curRow.scrollIntoView({ block: 'nearest' });
+    };
+
+    const runSearch = () => {
+      // 记住上次的检索词：关掉面板再按 Ctrl+F 时恢复，与浏览器原生查找栏的体验一致。
+      subtitleFindLastQuery = input.value;
+      matches = buildSubtitleMatches(lines || [], input.value);
+      cur = matches.length ? 0 : -1;
+      render();
+    };
+
+    const go = (i, seek) => {
+      if (!matches.length) return;
+      cur = (i + matches.length) % matches.length;
+      render();
+      if (seek) seekPlayer(matches[cur].from);
+    };
+
+    // 无字幕 → 语音识别 → 用识别结果继续检索
+    const startAsrThenFind = async () => {
+      if (asrBusy) return;
+      asrBusy = true;
+      render();
+      try {
+        const video = resolveCurrentVideo();
+        const track = await fetchAudioTrack(video);
+        if (!asrConsentGiven && !window.confirm(
+          `当前视频没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
+          + '并通过 StepFun 语音识别生成文字，会产生费用并上传音频。是否继续？'
+        )) { asrBusy = false; render(); return; }
+        asrConsentGiven = true;
+        const videoKey = videoCacheKey(video);
+        const selHash = 'full';
+        const asrCacheKey = `${videoKey}:asr-v3:${selHash}`;
+        let text = readCache(BODY_CACHE_PREFIX, asrCacheKey);
+        if (!text) {
+          showProgressPanel();
+          try {
+            const result = await transcribeVideoAudio(video, track, { mode: 'full' }, {
+              onDownloadProgress: f => updateProgress('正在下载音频', f, ''),
+              onChunkDelta: () => updateProgress('正在识别', null, ''),
+              refreshTrack: () => fetchAudioTrack(video),
+            });
+            text = result.text;
+          } finally {
+            hideProgressPanel();
+          }
+        }
+        if (!text) { showToast('识别结果为空'); asrBusy = false; render(); return; }
+        // 识别结果无时间戳，按句号/问号/感叹号/换行切成带"伪时间点"的行，
+        // 让检索至少能跳到大致的进度位置。
+        const chunks = String(text).split(/(?<=[。！？!?\n])/);
+        const total = Math.max(1, Number(track.duration) || 0);
+        lines = chunks
+          .map((c, i) => ({ from: (i / chunks.length) * total, to: ((i + 1) / chunks.length) * total, content: c.trim() }))
+          .filter(x => x.content);
+        if (!lines.length) { showToast('识别结果为空'); asrBusy = false; render(); return; }
+        writeCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`, lines);
+        asrBusy = false;
+        showToast('识别完成，可以开始检索');
+        render();
+        input.focus();
+      } catch (error) {
+        console.error('[复制字幕][检索]', error);
+        showToast(`识别失败：${error.message || error}`);
+        asrBusy = false;
+        render();
+      }
+    };
+
+    // ---- 事件 ----
+    let debounce = 0;
+    input.addEventListener('input', () => {
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(runSearch, 120);
+    });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); go(cur + (e.shiftKey ? -1 : 1), true); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    prevBtn.addEventListener('click', () => go(cur - 1, true));
+    nextBtn.addEventListener('click', () => go(cur + 1, true));
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+    // 面板打开期间，↑↓ 一律用于切换命中项（与 Enter/Shift+Enter 等价）。
+    // 输入框内要调整光标位置请用 Home/End 或点击——否则刚打完字光标在末尾，
+    // ↑ 会先被光标吃掉，行为不可预期。
+    // 注意：真实按键穿过 shadow 边界后 e.target 会被 retarget 到 host，
+    // 所以这里只依赖 window 上的监听，不去比对 e.target。
+    const onKey = e => {
+      if (e.key === 'Escape') { close(); return; }
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      go(cur + (e.key === 'ArrowUp' ? -1 : 1), true);
+    };
+    window.addEventListener('keydown', onKey);
+
+    function close() {
+      window.clearTimeout(debounce);
+      window.removeEventListener('keydown', onKey);
+      host.remove();
+    }
+
+    // ---- 加载字幕 ----
+    render();
+    loadSubtitleLinesForFind()
+      .then(res => {
+        lines = res ? res.lines : [];
+        render();
+        // 有恢复的检索词就自动重跑，重开后直接接着上次的结果看
+        if (subtitleFindLastQuery.trim()) runSearch();
+      })
+      .catch(error => {
+        console.error('[复制字幕][检索]', error);
+        loadFailed = `读取字幕失败：${error.message || error}`;
+        render();
+      });
+  }
+
   // ===== 无字幕视频的语音识别兜底 =====
 
   function getAsrApiKey() {
@@ -2002,8 +2385,12 @@
     try {
       return await fetchSubtitleBody(video, subtitle);
     } catch (error) {
-      if (error?.status !== 403) throw error;
-      console.warn('[复制字幕] 字幕直链被拒（HTTP 403），尝试换取新直链', error);
+      // 不限于 403：直链带 auth_key、有效期很短，而 meta 缓存的留存时间可设为"永久"，
+      // 过期后 CDN 既可能回 403 也可能直接断连（传输层失败）。两者都值得换一条新直链重试。
+      const isExpired = error?.status === 403
+        || /无法连接|请求失败|Failed to fetch|NetworkError|load failed/i.test(String(error?.message || ''));
+      if (!isExpired) throw error;
+      console.warn('[复制字幕] 字幕直链不可用，尝试换取新直链', error?.status || error?.message);
       let subtitles = [];
       try {
         subtitles = await fetchSubtitleMeta(video, { force: true });
@@ -2019,7 +2406,10 @@
       try {
         return await fetchSubtitleBody(video, fresh);
       } catch (retryError) {
-        if (retryError?.status !== 403) throw retryError;
+        if (retryError?.status !== 403
+            && !/无法连接|请求失败|Failed to fetch|NetworkError|load failed/i.test(String(retryError?.message || ''))) {
+          throw retryError;
+        }
         throw new Error(hint);
       }
     }
@@ -4283,5 +4673,26 @@
     window.setInterval(() => {
       try { mountTingwuButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
     }, 1500);
+  }
+
+  // ===== 字幕检索（Ctrl/Cmd+F）=====
+  // 只在视频类页面接管，避免劫持 B 站首页/空间页等处的原生查找。
+  // capture 阶段注册，抢在 B 站播放器自己的快捷键之前。
+  if (site === 'bilibili'
+      && /\/video\/|\/list\/|\/bangumi\/play\/|\/medialist\/play\//.test(location.pathname)) {
+    GM_registerMenuCommand('字幕检索（Ctrl+F）', openSubtitleFind);
+
+    const onSubtitleFindHotkey = e => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (String(e.key || '').toLowerCase() !== 'f') return;
+      // 面板已打开时，让输入框内部自行处理（全选等），不重复 preventDefault。
+      const inOurInput = e.target instanceof Element
+        && e.target.closest?.('#' + FIND_PANEL_HOST_ID) !== null;
+      if (inOurInput) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openSubtitleFind();
+    };
+    window.addEventListener('keydown', onSubtitleFindHotkey, true);
   }
 })();
