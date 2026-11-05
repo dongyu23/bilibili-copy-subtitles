@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.3
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。
+// @version      2.7.4
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -817,6 +817,8 @@
       // 忽略存储异常
     }
 
+    // 仅会话级前缀：内存与 sessionStorage 都没有就是没有，不去读 GM 层。
+    if (SESSION_ONLY_PREFIXES.indexOf(prefix) >= 0) return null;
     const ttl = getCacheTtlMs();
     if (ttl === 0) return null; // 仅本次会话，不读持久层
     try {
@@ -832,6 +834,18 @@
     }
   }
 
+  // GM 持久层（chrome.storage.local）的写入是同步桥接，大值会阻塞主线程数百毫秒；
+  // 且这个写入是延后到空闲帧执行的，正好落在用户悬停进度条、按播放/暂停的时刻，
+  // 表现为莫名的输入延迟（已实测复现 700ms 级主线程阻塞）。
+  //
+  // 字幕行缓存按前缀直接禁止落盘：它体积大（长视频上百 KB）、写入频繁（每切一个
+  // 视频/分P 就写一次），而重新获取只是一次接口调用——为它承受阻塞不值得。
+  // ASR 识别结果（BODY_CACHE_PREFIX）相反：写入是一次性的、用户本来就在等识别，
+  // 而重跑要真金白银计费，所以保留持久化。
+  const SESSION_ONLY_PREFIXES = [SUBTITLE_LINES_PREFIX];
+  // 其余前缀的体积兜底：超出也不落盘，避免异常大的值把主线程堵死。
+  const GM_PERSIST_MAX_BYTES = 128 * 1024;
+
   function writeCache(prefix, key, value) {
     const fullKey = `${prefix}${key}`;
     const entry = { value, cachedAt: new Date().toISOString() };
@@ -840,13 +854,20 @@
     try {
       serialized = JSON.stringify(entry);
       sessionStorage.setItem(fullKey, serialized);
-    } catch (_) {
-      return; // storage may be disabled
+    } catch (error) {
+      // 配额满时先淘汰最早的字幕行缓存再重试一次，否则缓存会一直写不进去。
+      if (error && error.name === 'QuotaExceededError') {
+        try { pruneSubtitleLinesCache(`${SUBTITLE_LINES_PREFIX}${key}`); } catch (_) { /* 忽略 */ }
+        try { sessionStorage.setItem(fullKey, serialized); } catch (_) { return; }
+      } else {
+        return; // storage may be disabled
+      }
     }
     if (getCacheTtlMs() === 0) return;
-    // 持久层写入延后到空闲帧：长视频的字幕行可达数百 KB，GM_setValue 是同步的扩展
-    // 存储调用，放在点击/按键的关键路径上会顿一下。内存与 sessionStorage 此刻已
-    // 可读，本次使用不受影响；持久层只是为了让下个会话还能命中。
+    if (SESSION_ONLY_PREFIXES.indexOf(prefix) >= 0) return;              // 仅会话级前缀
+    if (serialized.length > GM_PERSIST_MAX_BYTES) return;   // 体积兜底
+    // 持久层写入延后到空闲帧，避免占点击/按键的关键路径。
+    // 能走到这里的值已不超过 GM_PERSIST_MAX_BYTES，阻塞可忽略。
     const persist = () => { try { GM_setValue(fullKey, serialized); } catch (_) { /* 忽略存储异常 */ } };
     if (typeof window.requestIdleCallback === 'function') {
       window.requestIdleCallback(persist, { timeout: 5000 });

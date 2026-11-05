@@ -1,7 +1,7 @@
 # Bilibili / YouTube / 视频号 / 通义听悟 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.7.3-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.7.4-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube**、**微信视频号** 和 **通义听悟**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字；通义听悟则在转写详情页一键复制整篇转写稿。
@@ -120,7 +120,7 @@ B 站视频带有章节信息（进度条上可见的分段，且不少于 2 个
 | 前缀 | 内容 | 说明 |
 | --- | --- | --- |
 | `video-subtitles-meta-v6:` | 字幕列表（含直链） | 直链带 `auth_key`、有效期短 |
-| `video-subtitle-lines-v1:` | 原始字幕行（紧凑文本，`from\tto\tcontent` 每行一条） | **整篇、章节、检索、跨集四条链路共用这一份**；最多保留 8 条，超额按写入顺序淘汰 |
+| `video-subtitle-lines-v1:` | 原始字幕行（紧凑文本，`from\tto\tcontent` 每行一条） | **整篇、章节、检索、跨集四条链路共用这一份**；最多保留 8 条，超额按写入顺序淘汰；**仅会话级，不写 GM 持久层** |
 | `video-subtitles-body-v6:` | 语音识别结果、视频号转写 | 这些没有时间戳，无法从字幕行派生 |
 
 整篇复制、按章节复制、Ctrl+F 检索、跨集复制都从同一份字幕行各自派生文本，不再为每个章节组合各存一份拼接字符串——既避免重复占用，也让「整篇取过一次」之后章节直接可用，无需再拉一次。
@@ -627,6 +627,15 @@ https://tingwu.aliyun.com/*
   - 落盘体积：296 条 9KB（JSON 同样内容 15KB），比值 0.57；
   - 淘汰：预填 8 个假条目占满后再写入，最早的被丢、最新的保留、总数恒为 8；
   - 紧凑格式下全链路正常：Ctrl+F 读出 365 条字幕、检索 9 命中、Enter 跳转 25s→6.4s、复制 4584 字符。
+
+`2.7.4`（修复生产环境输入延迟——GM 持久层大值阻塞主线程）：
+
+- **问题**：用户反馈在生产环境（真实 Tampermonkey）里，悬停视频弹出进度栏、按播放/暂停都有约 1s 延迟。
+- **定位**：用 rAF 帧间隔监测主线程阻塞，把 `GM_setValue` 模拟成 `chrome.storage.local` 大值写入的耗时后**复现了 703ms 的单帧阻塞**。根因是 v2.7.2 引入的「持久层写入延后到空闲帧」——延后本身没错，但 `chrome.storage.local` 的写入是同步桥接，上百 KB 的值会阻塞主线程数百毫秒，而空闲帧正好落在用户悬停进度条、按播放/暂停的时刻。v2.7.2 之前它是阻塞点击（用户能归因），改成延后后阻塞一个随机的后续交互，反而更难察觉。
+- **修复**：字幕行缓存**按前缀直接禁止写 GM 持久层**，只留内存 + `sessionStorage`。判断依据是三类属性——体积大（长视频上百 KB）、写入频繁（每切一个视频/分P 一次）、重取便宜（一次接口调用），为它承受阻塞不值得。ASR 识别结果相反（一次性写入、用户本来就在等、重跑要计费），保留持久化。另加 128KB 体积兜底。
+- **顺带修**：`sessionStorage` 配额满时原先直接 return，导致字幕行缓存永远写不进去、淘汰逻辑也失效；改为配额满先淘汰最早条目再重试一次。
+- **验证**：同一实验条件下 `blockedFrames` 从 `[703]` 变为 `[]`，`maxGap` 22ms（正常帧时间），GM 写入 0 次而 `sessionStorage` 仍正常写入。功能回归：Ctrl+F 读出 365 条字幕、检索 9 命中、Enter 跳转 553.9s→6.3s、整篇与章节复制均 0 网络请求、GM 存储中不再出现字幕行条目。
+- **单测**：20 + 28 + 46 组断言全过。
 
 ## 开发检查
 
