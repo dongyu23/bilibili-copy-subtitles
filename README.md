@@ -1,7 +1,7 @@
 # Bilibili / YouTube / 视频号 / 通义听悟 一键复制全部字幕
 
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-用户脚本-00485b?logo=tampermonkey)](https://www.tampermonkey.net/)
-[![Version](https://img.shields.io/badge/version-2.7.2-00aeec)](./bilibili-copy-subtitles.user.js)
+[![Version](https://img.shields.io/badge/version-2.7.3-00aeec)](./bilibili-copy-subtitles.user.js)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 一个轻量的油猴脚本，同时支持 **Bilibili**、**YouTube**、**微信视频号** 和 **通义听悟**。打开有字幕的视频，点击页面左下角的 **复制全部字幕**，即可把整理后的纯文字字幕复制到剪贴板；视频号则通过分享链接把视频语音转成文字；通义听悟则在转写详情页一键复制整篇转写稿。
@@ -120,10 +120,14 @@ B 站视频带有章节信息（进度条上可见的分段，且不少于 2 个
 | 前缀 | 内容 | 说明 |
 | --- | --- | --- |
 | `video-subtitles-meta-v6:` | 字幕列表（含直链） | 直链带 `auth_key`、有效期短 |
-| `video-subtitle-lines-v1:` | 原始字幕行 `[{from,to,content}]` | **整篇、章节、检索、跨集四条链路共用这一份** |
+| `video-subtitle-lines-v1:` | 原始字幕行（紧凑文本，`from\tto\tcontent` 每行一条） | **整篇、章节、检索、跨集四条链路共用这一份**；最多保留 8 条，超额按写入顺序淘汰 |
 | `video-subtitles-body-v6:` | 语音识别结果、视频号转写 | 这些没有时间戳，无法从字幕行派生 |
 
 整篇复制、按章节复制、Ctrl+F 检索、跨集复制都从同一份字幕行各自派生文本，不再为每个章节组合各存一份拼接字符串——既避免重复占用，也让「整篇取过一次」之后章节直接可用，无需再拉一次。
+
+字幕行用制表符分隔的紧凑文本存储，不用 JSON 数组——后者要为每条重复一遍 `{"from":…,"to":…,"content":…}` 键名，2356 条就要多出几十 KB 纯键名。实测落盘体积约为 JSON 的 **0.57**（296 条字幕 15KB → 9KB）。
+
+同时字幕行缓存**最多保留 8 条**，超额按写入顺序淘汰最早的。长视频一集就上百 KB，看过的视频一多会把 `sessionStorage`（浏览器配额约 5MB）和 GM 存储撑爆——超额后每次 `setItem` 都会抛 `QuotaExceededError`，缓存会静默失效。
 
 ## 缓存与留存时间
 
@@ -611,6 +615,18 @@ https://tingwu.aliyun.com/*
   - 「全部字幕」模式 296 条 → 首屏 200 行，点击第 150 条跳到 433.6s；
   - Esc 关闭正常；
   - 延迟持久化：TTL=24h 时 `sessionStorage` 立即写入、持久层最终落盘；TTL=0 时按设计跳过。
+
+`2.7.3`（缩小字幕缓存体积 + 条目上限）：
+
+- **动机**：用户反馈「字幕占用文件大，导致页面卡顿」。字幕行按 JSON 数组存，每条都要重复 `{"from":…,"to":…,"content":…}` 键名；且条目数不设上限，看过的视频一多会把 `sessionStorage`（约 5MB 配额）和 GM 存储撑爆——超额后 `setItem` 持续抛 `QuotaExceededError`，缓存静默失效。
+- **紧凑序列化**：改为 `from\tto\tcontent` 每行一条的纯文本，content 里的 `\`、`\t`、`\n` 先转义避免与分隔符冲突，解析对无转义的行走快路径。实测落盘体积为 JSON 的 **0.57**（真实字幕 296 条 / 平均 12 字：15KB → 9KB）。注意早期一份测量说"1/3"，那是拿带 wrapper 的 JSON 和不带 wrapper 的紧凑串比，不公平；紧凑串落盘时也要套 `{value,cachedAt}`，其中的 `\t`/`\n` 会被 JSON 转义成两字符序列，这部分膨胀已计入。
+- **条目上限 8 + 按写入顺序淘汰**：另存一个写入顺序索引（key 带同一前缀，「清除缓存」能一起清掉），超额时把最早的条目从 `sessionStorage`、GM 存储和内存缓存里一并删掉。
+- **兼容旧格式**：缓存里 value 为数组时按旧 JSON 数组直读，为字符串时走紧凑解码，升级不用清缓存。
+- **单测**：新增 `subtitle-cache.test.js` 20 组断言——往返一致（`\N`/竖线/制表符/反斜杠/空 content/中文 emoji）、体积、脏数据容错（无分隔符、只有一个分隔符、时间非数字）、旧格式兼容。
+- **真实浏览器回归**（IAB + 真实登录态 + 真实字幕）：
+  - 落盘体积：296 条 9KB（JSON 同样内容 15KB），比值 0.57；
+  - 淘汰：预填 8 个假条目占满后再写入，最早的被丢、最新的保留、总数恒为 8；
+  - 紧凑格式下全链路正常：Ctrl+F 读出 365 条字幕、检索 9 命中、Enter 跳转 25s→6.4s、复制 4584 字符。
 
 ## 开发检查
 

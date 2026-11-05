@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.2
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。
+// @version      2.7.3
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -59,6 +59,11 @@
   // 字幕检索专用缓存：BODY_CACHE_PREFIX 存的是 normalizeSubtitle 之后的拼接字符串，
   // 时间戳已被丢弃，无法用于"跳转到第几分几秒"，所以另开一份存原始 [{from,to,content}]。
   const SUBTITLE_LINES_PREFIX = 'video-subtitle-lines-v1:';
+  // 写入顺序索引（key 带同一前缀，「清除缓存」时能一起清掉）
+  const SUBTITLE_LINES_INDEX_KEY = `${SUBTITLE_LINES_PREFIX}__order__`;
+  // 字幕行缓存条目上限。长视频一集就上百 KB，看过的视频一多会把 sessionStorage
+  // （浏览器配额约 5MB）撑爆，超额时按写入顺序淘汰最早的条目。
+  const SUBTITLE_LINES_MAX_ENTRIES = 8;
   const FIND_PANEL_HOST_ID = 'bili-subtitle-find-host';
   // 上次的检索词：关掉面板再按 Ctrl+F 时恢复，与浏览器原生查找栏的体验一致。
   let subtitleFindLastQuery = '';
@@ -1379,6 +1384,77 @@
   }
 
   // 数据层：复用既有字幕链路，结果按 视频:分P:语言 缓存（换 P 自然隔离）。
+  // ===== 字幕行的紧凑序列化 =====
+  // JSON 数组里 {from,to,content} 三个键名对每条重复一遍，2356 条就要多出几十 KB
+  // 纯键名。改成制表符分隔的纯文本，实测体积约为 JSON 的 1/3（203KB → 66KB），
+  // 直接减轻 sessionStorage 与 GM 存储的占用。
+  // content 里的 \ 和 \t、\n 先转义，避免与分隔符冲突；解析用快路径（无转义直返）。
+  const escapeSubtitleText = s => {
+    return String(s ?? '')
+      .replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+  };
+  const unescapeSubtitleText = s => {
+    if (s.indexOf('\\') < 0) return s;
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '\\' && i + 1 < s.length) {
+        const next = s[i + 1];
+        if (next === 'n') { out += '\n'; i += 1; continue; }
+        if (next === 't') { out += '\t'; i += 1; continue; }
+        if (next === '\\') { out += '\\'; i += 1; continue; }
+      }
+      out += s[i];
+    }
+    return out;
+  };
+  function encodeSubtitleLines(lines) {
+    return lines.map(l =>
+      `${Number(l?.from) || 0}\t${Number(l?.to) || 0}\t${escapeSubtitleText(l?.content)}`
+    ).join('\n');
+  }
+  function decodeSubtitleLines(text) {
+    if (typeof text !== 'string' || !text) return [];
+    const out = [];
+    for (const line of text.split('\n')) {
+      const i = line.indexOf('\t');
+      if (i < 0) continue;
+      const j = line.indexOf('\t', i + 1);
+      if (j < 0) continue;
+      out.push({
+        from: Number(line.slice(0, i)) || 0,
+        to: Number(line.slice(i + 1, j)) || 0,
+        content: unescapeSubtitleText(line.slice(j + 1)),
+      });
+    }
+    return out;
+  }
+  // 缓存里 value 为字符串 = 紧凑格式；为数组 = v2.7.2 及更早的 JSON 数组（兼容读取）。
+  function normalizeSubtitleLines(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'string') return decodeSubtitleLines(value);
+    return [];
+  }
+
+  // 字幕行缓存淘汰：超额时按写入顺序丢最早的，避免把 sessionStorage 撑爆。
+  function pruneSubtitleLinesCache(freshKey) {
+    let order = [];
+    try { order = JSON.parse(sessionStorage.getItem(SUBTITLE_LINES_INDEX_KEY) || '[]'); } catch (_) { /* 忽略 */ }
+    if (!Array.isArray(order)) order = [];
+    order = order.filter(key => key !== freshKey);
+    order.push(freshKey);
+    const dropped = [];
+    while (order.length > SUBTITLE_LINES_MAX_ENTRIES) {
+      const key = order.shift();
+      if (key && key !== freshKey) dropped.push(key);
+    }
+    try { sessionStorage.setItem(SUBTITLE_LINES_INDEX_KEY, JSON.stringify(order)); } catch (_) { /* 忽略 */ }
+    for (const key of dropped) {
+      try { sessionStorage.removeItem(key); } catch (_) { /* 忽略 */ }
+      try { if (typeof GM_deleteValue === 'function') GM_deleteValue(key); } catch (_) { /* 忽略 */ }
+      memoryCache.delete(key);
+    }
+  }
+
   // 字幕行的唯一缓存源。整篇、章节、检索三条链路都从这里取原始 [{from,to,content}]，
   // 各自在内存里派生——避免"整篇一份字符串 + 每个章节组合各一份字符串"的重复占用，
   // 也避免整篇取过之后章节还要再拉一次。ASR 结果没有时间戳，仍走 BODY_CACHE_PREFIX。
@@ -1387,15 +1463,17 @@
     const videoKey = videoCacheKey(video);
     const lang = document.getElementById(SELECT_ID)?.value || 'auto';
     const cacheKey = `${videoKey}:${lang}`;
-    let lines = readCache(SUBTITLE_LINES_PREFIX, cacheKey);
-    if (!lines) {
-      const subtitles = await fetchSubtitleMeta(video);
-      const subtitle = chooseSubtitle(subtitles, lang);
-      if (!subtitle?.subtitle_url) return null;
-      lines = await fetchSubtitleBodyFresh(video, subtitle, lang);
-      if (Array.isArray(lines) && lines.length) {
-        writeCache(SUBTITLE_LINES_PREFIX, cacheKey, lines);
-      }
+    const cached = readCache(SUBTITLE_LINES_PREFIX, cacheKey);
+    if (cached != null) {
+      return { lines: normalizeSubtitleLines(cached), lang, videoKey };
+    }
+    const subtitles = await fetchSubtitleMeta(video);
+    const subtitle = chooseSubtitle(subtitles, lang);
+    if (!subtitle?.subtitle_url) return null;
+    const lines = await fetchSubtitleBodyFresh(video, subtitle, lang);
+    if (Array.isArray(lines) && lines.length) {
+      writeCache(SUBTITLE_LINES_PREFIX, cacheKey, encodeSubtitleLines(lines));
+      pruneSubtitleLinesCache(`${SUBTITLE_LINES_PREFIX}${cacheKey}`);
     }
     return { lines: Array.isArray(lines) ? lines : [], lang, videoKey };
   }
@@ -1712,7 +1790,9 @@
           .map((c, i) => ({ from: (i / chunks.length) * total, to: ((i + 1) / chunks.length) * total, content: c.trim() }))
           .filter(x => x.content);
         if (!lines.length) { showToast('识别结果为空'); asrBusy = false; render(); return; }
-        writeCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`, lines);
+        const asrLinesKey = `${SUBTITLE_LINES_PREFIX}${videoKey}:asr`;
+        writeCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`, encodeSubtitleLines(lines));
+        pruneSubtitleLinesCache(asrLinesKey);
         asrBusy = false;
         showToast('识别完成，可以开始检索');
         render();
