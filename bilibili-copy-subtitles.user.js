@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.1
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。
+// @version      2.7.2
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -831,9 +831,22 @@
     const fullKey = `${prefix}${key}`;
     const entry = { value, cachedAt: new Date().toISOString() };
     memoryCache.set(fullKey, entry);
-    try { sessionStorage.setItem(fullKey, JSON.stringify(entry)); } catch (_) { /* storage may be disabled */ }
-    if (getCacheTtlMs() !== 0) {
-      try { GM_setValue(fullKey, JSON.stringify(entry)); } catch (_) { /* 忽略存储异常 */ }
+    let serialized;
+    try {
+      serialized = JSON.stringify(entry);
+      sessionStorage.setItem(fullKey, serialized);
+    } catch (_) {
+      return; // storage may be disabled
+    }
+    if (getCacheTtlMs() === 0) return;
+    // 持久层写入延后到空闲帧：长视频的字幕行可达数百 KB，GM_setValue 是同步的扩展
+    // 存储调用，放在点击/按键的关键路径上会顿一下。内存与 sessionStorage 此刻已
+    // 可读，本次使用不受影响；持久层只是为了让下个会话还能命中。
+    const persist = () => { try { GM_setValue(fullKey, serialized); } catch (_) { /* 忽略存储异常 */ } };
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(persist, { timeout: 5000 });
+    } else {
+      window.setTimeout(persist, 0);
     }
   }
 
@@ -1519,16 +1532,40 @@
       return box;
     };
 
+    // 窗口化列表渲染：命中列表与全量字幕共用。
+    // 长视频里一个高频词可能命中上千条（实测「的」919 条），一次性建满 DOM 会触发
+    // 大面积布局重绘，在 B 站这种重页面上就是肉眼可见的卡顿。改成按批渲染 +
+    // 滚动续载，首屏成本与列表总长脱钩。
+    const ROW_BATCH = 200;
+    const renderWindowed = (buildRow, total) => {
+      list.onscroll = null;
+      list.replaceChildren();
+      if (!total) return;
+      let rendered = 0;
+      const appendBatch = () => {
+        const end = Math.min(total, rendered + ROW_BATCH);
+        if (end === rendered) return;
+        const frag = document.createDocumentFragment();
+        for (let i = rendered; i < end; i++) frag.appendChild(buildRow(i));
+        list.appendChild(frag);
+        rendered = end;
+      };
+      appendBatch();
+      if (rendered < total) {
+        list.onscroll = () => {
+          if (rendered >= total) { list.onscroll = null; return; }
+          if (list.scrollTop + list.clientHeight >= list.scrollHeight - 240) appendBatch();
+        };
+      }
+    };
+
     // 全量字幕列表：不输入关键字也能逐条点击跳转。
-    // 长视频可能上千条，超出上限时只渲染当前窗口附近的一段，避免一次性建太多 DOM。
-    const ALL_ROWS_WINDOW = 400;
     const renderAll = () => {
       const total = lines.length;
       count.textContent = `全部 ${total} 条字幕`;
       prevBtn.disabled = nextBtn.disabled = true;
       if (!total) { renderEmpty('没有可显示的字幕'); return; }
-
-      const buildRow = i => {
+      renderWindowed(i => {
         const item = lines[i];
         const row = document.createElement('div');
         row.className = 'row';
@@ -1541,30 +1578,7 @@
         row.append(t, txt);
         row.addEventListener('click', () => seekPlayer(Number(item.from) || 0));
         return row;
-      };
-
-      if (total <= ALL_ROWS_WINDOW) {
-        const frag = document.createDocumentFragment();
-        for (let i = 0; i < total; i++) frag.appendChild(buildRow(i));
-        list.replaceChildren(frag);
-        return;
-      }
-
-      // 长列表：先渲染前 ALL_ROWS_WINDOW 条，滚动到接近底部时再续批
-      let rendered = 0;
-      const appendBatch = () => {
-        const frag = document.createDocumentFragment();
-        const end = Math.min(total, rendered + ALL_ROWS_WINDOW);
-        for (let i = rendered; i < end; i++) frag.appendChild(buildRow(i));
-        list.appendChild(frag);
-        rendered = end;
-      };
-      list.replaceChildren();
-      appendBatch();
-      list.onscroll = () => {
-        if (rendered >= total) { list.onscroll = null; return; }
-        if (list.scrollTop + list.clientHeight >= list.scrollHeight - 240) appendBatch();
-      };
+      }, total);
     };
 
     const render = () => {
@@ -1623,8 +1637,10 @@
       b.textContent = String(cur + 1);
       count.append(b, document.createTextNode(` / ${matches.length} 命中`));
 
-      const frag = document.createDocumentFragment();
-      matches.forEach((m, i) => {
+      // 与全量字幕共用同一套窗口化渲染：高频词可能命中上千条，
+      // 一次建满会卡；当前项恒为 0，一定落在首批里。
+      renderWindowed(i => {
+        const m = matches[i];
         const row = document.createElement('div');
         row.className = 'row' + (i === cur ? ' cur' : '');
         const t = document.createElement('span');
@@ -1635,9 +1651,8 @@
         txt.innerHTML = renderLine(m, i === cur);
         row.append(t, txt);
         row.addEventListener('click', () => { go(i, true); });
-        frag.appendChild(row);
-      });
-      list.replaceChildren(frag);
+        return row;
+      }, matches.length);
       prevBtn.disabled = nextBtn.disabled = matches.length < 2;
       const curRow = list.children[cur];
       if (curRow) curRow.scrollIntoView({ block: 'nearest' });
