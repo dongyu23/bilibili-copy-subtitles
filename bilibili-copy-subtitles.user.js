@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.4
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。
+// @version      2.7.5
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -53,6 +53,7 @@
   const HIDDEN_KEY = 'bili-copy-subtitles-button-hidden';
   const WX_BUTTON_ID = 'bili-copy-wxchannels-button';
   const SETTINGS_BUTTON_ID = 'bili-copy-settings-button';
+  const CLEAR_CACHE_BUTTON_ID = 'bili-copy-clear-cache-button';
   // v6 起缓存带留存时间；仅本次会话的缓存走 sessionStorage，跨会话走 Tampermonkey 存储。
   const META_CACHE_PREFIX = 'video-subtitles-meta-v6:';
   const BODY_CACHE_PREFIX = 'video-subtitles-body-v6:';
@@ -338,6 +339,22 @@
       transition: opacity .18s ease, color .18s ease, background .18s ease;
     }
     #${SETTINGS_BUTTON_ID}:hover { opacity: 1; color: #61666d; background: rgba(127, 127, 127, .26); }
+    /* 清除缓存：与齿轮并列的次级按钮，比滚到设置面板底部好找 */
+    #${CLEAR_CACHE_BUTTON_ID} {
+      width: 28px;
+      min-height: 24px;
+      align-self: flex-end;
+      padding: 0;
+      border: 0;
+      border-radius: 5px;
+      color: #9499a0;
+      background: rgba(127, 127, 127, .14);
+      font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      opacity: .6;
+      transition: opacity .18s ease, color .18s ease, background .18s ease;
+    }
+    #${CLEAR_CACHE_BUTTON_ID}:hover { opacity: 1; color: #e8112d; background: rgba(232, 17, 45, .12); }
     #${WX_PANEL_ID} {
       position: fixed;
       z-index: 100002;
@@ -873,6 +890,31 @@
       window.requestIdleCallback(persist, { timeout: 5000 });
     } else {
       window.setTimeout(persist, 0);
+    }
+  }
+
+  // v2.7.4 起字幕行缓存改为仅会话级（不写 GM 持久层）——GM 的 chrome.storage 写入是
+  // 同步桥接，大值会阻塞主线程，且延后到空闲帧执行，正好落在悬停进度栏/按播放暂停的
+  // 时刻。更早版本可能已经往 GM 里写了大值字幕行，这里在启动时顺手清掉，
+  // 用户不需要手动操作。读 GM 层同样是阻塞的，所以不能留着。
+  function migrateStaleGmLinesCache() {
+    if (typeof GM_listValues !== 'function' || typeof GM_deleteValue !== 'function') return;
+    const run = () => {
+      let keys = [];
+      try { keys = GM_listValues(); } catch (_) { return; }
+      const stale = keys.filter(key => key.startsWith(SUBTITLE_LINES_PREFIX));
+      for (const key of stale) {
+        try { GM_deleteValue(key); } catch (_) { /* 忽略存储异常 */ }
+      }
+      if (stale.length) {
+        debugLog('已清理旧版写入的 GM 字幕行缓存', stale.length, '条');
+      }
+    };
+    // 延后到空闲帧，避免拖慢启动
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(run, { timeout: 5000 });
+    } else {
+      window.setTimeout(run, 0);
     }
   }
 
@@ -4214,6 +4256,19 @@
     settingsButton.title = '设置（Key / 端点 / 调试 / 元宝 Cookie / 缓存）';
     settingsButton.addEventListener('click', () => openSettingsPanel());
     controls.appendChild(settingsButton);
+    // 清除缓存：直接可达，不用滚到设置面板底部
+    const clearCacheButton = document.createElement('button');
+    clearCacheButton.id = CLEAR_CACHE_BUTTON_ID;
+    clearCacheButton.type = 'button';
+    clearCacheButton.textContent = '🗑';
+    clearCacheButton.title = '清除全部字幕/识别缓存';
+    clearCacheButton.dataset.hidden = String(isHidden());
+    clearCacheButton.addEventListener('click', () => {
+      if (!window.confirm('确定清除全部字幕与识别结果缓存？\n（已复制/识别过的内容需要重新获取）')) return;
+      clearAllCaches();
+      showToast('已清除全部字幕缓存');
+    });
+    controls.appendChild(clearCacheButton);
     controls.dataset.hidden = String(isHidden());
     document.body.appendChild(controls);
   }
@@ -4799,6 +4854,8 @@
       if (button) button.dataset.hidden = String(hidden);
       const controls = document.getElementById(CONTROLS_ID);
       if (controls) controls.dataset.hidden = String(hidden);
+      const clearBtn = document.getElementById(CLEAR_CACHE_BUTTON_ID);
+      if (clearBtn) clearBtn.dataset.hidden = String(hidden);
     });
     GM_registerMenuCommand('清除识别断点', () => {
       if (typeof GM_listValues !== 'function') return;
@@ -4828,6 +4885,9 @@
       try { mountTingwuButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
     }, 1500);
   }
+
+  // 清理旧版写入的 GM 字幕行缓存（v2.7.4 起不再写 GM，旧条目留着只会拖慢读取）
+  migrateStaleGmLinesCache();
 
   // ===== 字幕检索（Ctrl/Cmd+F）=====
   // 只在视频类页面接管，避免劫持 B 站首页/空间页等处的原生查找。
