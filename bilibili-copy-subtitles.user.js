@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.7.5
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。
+// @version      2.8.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -274,10 +274,13 @@
       bottom: 16px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
       align-items: stretch;
       width: 124px;
     }
+    /* 统一盒模型：带 1px 边框的次级按钮/下拉才不会比无边框的主按钮宽出 2px，
+       右缘参差是旧版“看着乱”的主因。 */
+    #${CONTROLS_ID} > *, #${CONTROLS_ID} .tools-row > button { box-sizing: border-box; }
     #${BUTTON_ID} {
       width: 100%;
       min-height: 44px;
@@ -299,7 +302,7 @@
     #${WX_BUTTON_ID} {
       width: 100%;
       min-height: 30px;
-      padding: 5px 7px;
+      padding: 5px 8px;
       border: 1px solid rgba(0, 0, 0, .12);
       border-radius: 6px;
       color: #61666d;
@@ -313,7 +316,7 @@
     #${UPLOAD_BUTTON_ID} {
       width: 100%;
       min-height: 30px;
-      padding: 5px 7px;
+      padding: 5px 8px;
       border: 1px solid rgba(0, 0, 0, .12);
       border-radius: 6px;
       color: #61666d;
@@ -323,17 +326,22 @@
       transition: background .18s ease, color .18s ease;
     }
     #${UPLOAD_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
+    /* 工具行：齿轮与清缓存并排一行（旧版各占一整行，两个小图标竖着叠显得零散）。 */
+    #${CONTROLS_ID} .tools-row {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+    }
     /* 设置入口：刻意弱化的齿轮，平时不显眼；淡底保证暗色主题下也找得到。 */
     #${SETTINGS_BUTTON_ID} {
-      width: 28px;
-      min-height: 24px;
-      align-self: flex-end;
+      flex: 1;
+      min-height: 26px;
       padding: 0;
       border: 0;
       border-radius: 5px;
       color: #9499a0;
       background: rgba(127, 127, 127, .14);
-      font: 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 13px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       cursor: pointer;
       opacity: .6;
       transition: opacity .18s ease, color .18s ease, background .18s ease;
@@ -341,9 +349,8 @@
     #${SETTINGS_BUTTON_ID}:hover { opacity: 1; color: #61666d; background: rgba(127, 127, 127, .26); }
     /* 清除缓存：与齿轮并列的次级按钮，比滚到设置面板底部好找 */
     #${CLEAR_CACHE_BUTTON_ID} {
-      width: 28px;
-      min-height: 24px;
-      align-self: flex-end;
+      flex: 1;
+      min-height: 26px;
       padding: 0;
       border: 0;
       border-radius: 5px;
@@ -467,7 +474,7 @@
     #${SELECT_ID} {
       width: 100%;
       min-height: 30px;
-      padding: 5px 6px;
+      padding: 5px 8px;
       border: 1px solid rgba(0, 0, 0, .12);
       border-radius: 6px;
       color: #18191c;
@@ -4255,7 +4262,6 @@
     settingsButton.textContent = '⚙';
     settingsButton.title = '设置（Key / 端点 / 调试 / 元宝 Cookie / 缓存）';
     settingsButton.addEventListener('click', () => openSettingsPanel());
-    controls.appendChild(settingsButton);
     // 清除缓存：直接可达，不用滚到设置面板底部
     const clearCacheButton = document.createElement('button');
     clearCacheButton.id = CLEAR_CACHE_BUTTON_ID;
@@ -4268,7 +4274,12 @@
       clearAllCaches();
       showToast('已清除全部字幕缓存');
     });
-    controls.appendChild(clearCacheButton);
+    // 齿轮与清缓存并排一行（.tools-row），不再各占一整行。
+    const toolsRow = document.createElement('div');
+    toolsRow.className = 'tools-row';
+    toolsRow.appendChild(settingsButton);
+    toolsRow.appendChild(clearCacheButton);
+    controls.appendChild(toolsRow);
     controls.dataset.hidden = String(isHidden());
     document.body.appendChild(controls);
   }
@@ -4278,10 +4289,15 @@
   // 勾选集数后逐集获取字幕，按 【Pn】【标题】 分段拼接复制。字幕列表逐集走
   // WBI 签名的 player/wbi/v2 接口（见下）并复用统一缓存；无字幕的集数跳过并在
   // 结果里说明。
+  // v2.8.0 起同样支持合集（ugc_season）：合集视频 pages 只有 1 项，但右侧面板
+  // 与多分P同构（B 站同一套“视频选集”组件）；合集的每集是独立 BV，展开成带
+  // 各自 bvid/aid 的“伪分P”后复用整套逐集管线（见 fetchVideoPages）。
 
   const EPISODE_BUTTON_ID = 'bili-copy-cross-episodes-button';
   const EPISODE_PANEL_HOST_ID = 'bili-sub-episode-host';
-  const PAGES_CACHE_PREFIX = 'video-pages-v1:';
+  // v2：旧 v1 缓存对合集视频只存了“1 个分P”（当时合集分支不存在），会永久挡住
+  // 合集识别，必须换键作废。
+  const PAGES_CACHE_PREFIX = 'video-pages-v2:';
   let episodeCopyCancelled = false;
 
   // ===== 跨集字幕列表必须走 WBI 签名的 /x/player/wbi/v2 =====
@@ -4391,6 +4407,11 @@
   }
 
   // 选集列表：view 接口一次给出全部分P的 cid/标题/时长，登录态不影响该接口。
+  // 单分P 且挂在合集（ugc_season）里时，把 sections[].episodes[] 展开成“伪分P”：
+  // 每集带自己的 bvid/aid/cid/标题/时长/小节名，后续逐集管线（WBI 字幕请求、
+  // 缓存键、ASR 兜底）按每集自己的 bvid+cid 独立工作。episode.page 是该集视频
+  // 自己的分P描述对象（cid/duration 取自它），episode.title 是合集内短标题。
+  // 多分P 与合集并存的视频（罕见）优先按分P 处理，维持 v2.3 行为。
   async function fetchVideoPages(bvid) {
     const cacheKey = `view:${bvid}`;
     const cached = readCache(PAGES_CACHE_PREFIX, cacheKey);
@@ -4406,7 +4427,33 @@
       }))
       .filter(page => page.cid)
       .sort((a, b) => a.page - b.page);
-    const value = { aid: Number(result.data?.aid) || 0, title: String(result.data?.title || ''), pages };
+    const season = result.data?.ugc_season;
+    const seasonPages = [];
+    if (pages.length <= 1 && Array.isArray(season?.sections)) {
+      for (const section of season.sections) {
+        for (const episode of section.episodes || []) {
+          const cid = Number(episode?.cid || episode?.page?.cid) || 0;
+          if (!cid || !episode?.bvid) continue;
+          seasonPages.push({
+            page: seasonPages.length + 1,
+            cid,
+            part: String(episode.title || episode.page?.part || '').trim(),
+            duration: Number(episode.page?.duration) || 0,
+            bvid: String(episode.bvid),
+            aid: Number(episode.aid) || 0,
+            section: String(section.title || '').trim(),
+          });
+        }
+      }
+    }
+    const isSeason = seasonPages.length > 1;
+    const value = {
+      aid: Number(result.data?.aid) || 0,
+      title: String(result.data?.title || ''),
+      isSeason,
+      seasonTitle: isSeason ? String(season.title || '') : '',
+      pages: isSeason ? seasonPages : pages,
+    };
     writeCache(PAGES_CACHE_PREFIX, cacheKey, value);
     return value;
   }
@@ -4437,9 +4484,10 @@
   // fetchEpisodeSubtitleMeta（WBI 优先），不依赖播放器捕获链接，避免跨集场景空等。
   // 选集选择面板：与章节面板同一套交互（全部选集 ⇄ 勾选集数），另加语言偏好下拉。
   // 语言选项来自首个分P的字幕列表；单集缺失所选语言时逐集自动回退（中文优先）。
+  // 合集（isSeason）时列表按合集小节分组显示，当前集按 bvid 匹配（多分P按 p 序号）。
   function showEpisodePanel(options) {
     return new Promise(resolve => {
-      const { pages, videoTitle, languageOptions, currentLanguage, currentPage } = options;
+      const { pages, videoTitle, languageOptions, currentLanguage, currentPage, currentBvid, isSeason } = options;
       const host = document.createElement('div');
       host.id = EPISODE_PANEL_HOST_ID;
       host.style.cssText = 'position:fixed;inset:0;z-index:2147483646';
@@ -4461,6 +4509,10 @@
         .row.dim{opacity:.45}
         .row .current{color:#00aeec;font-size:12px;flex:none}
         .row .dur{color:#999;font-size:12px;flex:none}
+        .group{font-size:12px;color:#999;font-weight:600;padding:8px 6px 2px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+        .group:first-child{padding-top:2px}
+        .group button{border:none;background:none;color:#00aeec;cursor:pointer;font-size:12px;font-weight:400;padding:0;flex:none}
+        .group button:hover{text-decoration:underline}
         .full{font-weight:600;border-bottom:1px solid #eee;margin-bottom:4px}
         .actions{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid #eee}
         .actions .status{flex:1;font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -4483,7 +4535,9 @@
       const hint = document.createElement('div');
       hint.className = 'hint';
       const hintText = document.createElement('span');
-      hintText.textContent = '默认复制全部选集；取消后可勾选需要的集数，输出按 【Pn】【标题】 分段。';
+      hintText.textContent = isSeason
+        ? '默认复制全部集数；也可点小节右侧「全选本节」整节勾选，或单集勾选，输出按 【Pn】【标题】 分段（Pn 为合集内序号）。'
+        : '默认复制全部选集；取消后可勾选需要的集数，输出按 【Pn】【标题】 分段。';
       hint.appendChild(hintText);
       const toggleAllBtn = document.createElement('button');
       toggleAllBtn.type = 'button';
@@ -4525,7 +4579,24 @@
       list.appendChild(fullRow);
 
       const boxes = [];
+      // 每个小节一个整节开关：点「全选本节」勾上该节全部集数（再点取消）。
+      const groupToggles = new Map(); // section -> { btn, items: [checkbox] }
+      let lastSection = null;
       pages.forEach((page, index) => {
+        if (isSeason && page.section && page.section !== lastSection) {
+          lastSection = page.section;
+          const group = document.createElement('div');
+          group.className = 'group';
+          const name = document.createElement('span');
+          name.textContent = page.section;
+          const groupBtn = document.createElement('button');
+          groupBtn.type = 'button';
+          groupBtn.title = '勾选/取消本小节全部集数';
+          group.appendChild(name);
+          group.appendChild(groupBtn);
+          list.appendChild(group);
+          groupToggles.set(page.section, { btn: groupBtn, items: [] });
+        }
         const row = document.createElement('label');
         row.className = 'row dim';
         const cb = document.createElement('input');
@@ -4539,7 +4610,11 @@
         row.appendChild(cb);
         row.appendChild(span);
         row.appendChild(dur);
-        if (page.page === Number(currentPage)) {
+        // 合集每集是独立 BV，按 bvid 识别当前集；多分P仍按 p 序号。
+        const isCurrent = page.bvid
+          ? page.bvid === currentBvid
+          : page.page === Number(currentPage);
+        if (isCurrent) {
           const current = document.createElement('span');
           current.className = 'current';
           current.textContent = '当前';
@@ -4547,7 +4622,27 @@
         }
         list.appendChild(row);
         boxes.push({ cb, row });
+        const groupState = groupToggles.get(page.section || '');
+        if (groupState) groupState.items.push(cb);
       });
+
+      // 小节开关文案随勾选状态同步：全勾时显示「取消本节」，否则「全选本节」。
+      const syncGroupLabels = () => {
+        for (const { btn, items } of groupToggles.values()) {
+          const all = items.length > 0 && items.every(cb => cb.checked);
+          btn.textContent = all ? '取消本节' : '全选本节';
+        }
+      };
+      syncGroupLabels();
+      for (const { btn, items } of groupToggles.values()) {
+        btn.addEventListener('click', () => {
+          const target = !items.every(cb => cb.checked);
+          for (const cb of items) cb.checked = target;
+          if (target) fullCb.checked = false;
+          syncGroupLabels();
+          syncMode();
+        });
+      }
 
       const syncMode = () => {
         const full = fullCb.checked;
@@ -4555,11 +4650,13 @@
       };
       fullCb.addEventListener('change', () => {
         if (fullCb.checked) for (const b of boxes) b.cb.checked = false;
+        syncGroupLabels();
         syncMode();
       });
       for (const b of boxes) {
         b.cb.addEventListener('change', () => {
           if (b.cb.checked) fullCb.checked = false;
+          syncGroupLabels();
           syncMode();
         });
       }
@@ -4567,6 +4664,7 @@
         const anyUnchecked = boxes.some(b => !b.cb.checked);
         for (const b of boxes) b.cb.checked = anyUnchecked;
         fullCb.checked = !anyUnchecked;
+        syncGroupLabels();
         syncMode();
       });
 
@@ -4692,10 +4790,22 @@
     const asrRunState = { declined: false, keyMissing: false };
     episodeCopyCancelled = false;
     let done = 0;
+    // 跳过提示里带集标题（截断），合集场景光看 Pn 分不清是哪一集。
+    const epLabel = pageInfo => {
+      const part = pageInfo.part || '';
+      return part ? `P${pageInfo.page} ${part.length > 10 ? `${part.slice(0, 10)}…` : part}` : `P${pageInfo.page}`;
+    };
     for (const pageInfo of pages) {
       if (episodeCopyCancelled) return null;
       ui.progress(done, pages.length, pageInfo);
-      const video = { site: 'bilibili', bvid, aid, cid: pageInfo.cid };
+      // 合集的每集是独立 BV：bvid/aid 取该集自带的（伪分P），多分P沿用当前页的。
+      // 后续所有缓存键（字幕/ASR）都是 bvid:cid，逐集天然隔离、与单视频链路互通。
+      const video = {
+        site: 'bilibili',
+        bvid: pageInfo.bvid || bvid,
+        aid: pageInfo.aid || aid,
+        cid: pageInfo.cid,
+      };
       try {
         const subtitles = await fetchEpisodeSubtitleMeta(video);
         const subtitle = chooseSubtitle(subtitles, language);
@@ -4710,13 +4820,13 @@
           text = await transcribeEpisodeViaAsr(video, pageInfo, asrRunState);
         }
         if (!text) {
-          skipped.push(`P${pageInfo.page}`);
+          skipped.push(epLabel(pageInfo));
         } else {
           sections.push(`【P${pageInfo.page}】${pageInfo.part || `第${pageInfo.page}个分P`}\n${text}`);
         }
       } catch (error) {
         console.warn('[复制字幕] 跨集获取失败', `P${pageInfo.page}`, error);
-        skipped.push(`P${pageInfo.page}`);
+        skipped.push(epLabel(pageInfo));
       }
       done += 1;
       ui.progress(done, pages.length, null);
@@ -4762,13 +4872,20 @@
         return;
       }
       if (info.pages.length <= 1) {
-        showToast('当前视频只有一个分P，无需跨集复制');
+        showToast('当前视频只有一个分P（或合集仅一集），无需跨集复制');
         return;
       }
-      // 语言选项取首个分P的字幕列表（各分P语言通常一致；缺失时逐集自动回退）。
+      // 语言选项取首集的字幕列表（各集语言通常一致；缺失时逐集自动回退）。
+      // 合集时首集是独立 BV，bvid/aid 用它自己的。
       let languageOptions = [];
       try {
-        const firstSubs = await fetchEpisodeSubtitleMeta({ site: 'bilibili', bvid, aid: info.aid, cid: info.pages[0].cid });
+        const firstPage = info.pages[0];
+        const firstSubs = await fetchEpisodeSubtitleMeta({
+          site: 'bilibili',
+          bvid: firstPage.bvid || bvid,
+          aid: firstPage.aid || info.aid,
+          cid: firstPage.cid,
+        });
         languageOptions = firstSubs
           .map(s => ({ lan: s.lan || '', label: subtitleLanguageLabel(s) }))
           .filter(option => option.lan);
@@ -4778,10 +4895,12 @@
       const currentLanguage = document.getElementById(SELECT_ID)?.value || 'auto';
       const picked = await showEpisodePanel({
         pages: info.pages,
-        videoTitle: info.title,
+        videoTitle: info.seasonTitle || info.title,
         languageOptions,
         currentLanguage,
         currentPage: Number(new URL(location.href).searchParams.get('p')) || 1,
+        currentBvid: bvid,
+        isSeason: !!info.isSeason,
       });
       if (!picked) return;
       try {
@@ -4803,16 +4922,23 @@
     }
   }
 
-  // 选集面板头部的“跨集复制”入口：仅多分P的 /video/ 页显示；页面重渲染/切换
-  // 视频后由轻量巡检重建或摘除，不影响选集面板自身的交互。
+  // 选集面板头部的“跨集复制”入口：多分P 或挂合集（ugc_season）的 /video/ 页显示
+  // （B 站两类“视频选集”用的是同一套 .video-pod 组件）；页面重渲染/切换视频后由
+  // 轻量巡检重建或摘除，不影响选集面板自身的交互。
   function mountEpisodeButton() {
     const existing = document.getElementById(EPISODE_BUTTON_ID);
     if (site !== 'bilibili' || !/\/video\//.test(location.pathname)) {
       if (existing) existing.remove();
       return;
     }
-    const pageCount = (unsafeWindowOrWindow().__INITIAL_STATE__?.videoData?.pages || []).length;
-    if (pageCount === 1) {
+    const videoData = unsafeWindowOrWindow().__INITIAL_STATE__?.videoData || {};
+    const pageCount = (videoData.pages || []).length;
+    // 合集：__INITIAL_STATE__ 里同样带 ugc_season.sections[].episodes[]，
+    // 页面数虽然只有 1，但合集集数 > 1 时同样挂出入口。
+    const seasonCount = Array.isArray(videoData.ugc_season?.sections)
+      ? videoData.ugc_season.sections.reduce((sum, section) => sum + (section.episodes || []).length, 0)
+      : 0;
+    if (pageCount <= 1 && seasonCount <= 1) {
       if (existing) existing.remove();
       return;
     }
@@ -4824,7 +4950,7 @@
     button.id = EPISODE_BUTTON_ID;
     button.type = 'button';
     button.textContent = '跨集复制';
-    button.title = '按选集跨分P复制字幕：勾选集数，逐集获取后按 【Pn】【标题】 分段拼接';
+    button.title = '跨选集复制字幕（多分P或合集）：勾选集数，逐集获取后按 【Pn】【标题】 分段拼接';
     button.style.cssText = 'flex:none;border:none;background:none;padding:0;margin-left:8px;'
       + 'font-size:12px;line-height:18px;color:#9499A0;cursor:pointer;font-family:inherit;';
     button.addEventListener('mouseenter', () => { button.style.color = '#00aeec'; });
