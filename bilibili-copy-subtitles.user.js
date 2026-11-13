@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.9.1
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时仅评论并说明），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.1 设置面板重排：卡片式分区（StepFun 识别/视频号 Cookie/功能开关/字幕缓存）、页头 Key 状态徽章与关闭按钮、输入框焦点态、保存与取消提为底部固定操作条。
+// @version      2.9.2
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时仅评论并说明），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -525,217 +525,7 @@
       transform: translateX(-50%);
       pointer-events: none;
     }
-    #${KEY_PANEL_ID} {
-      position: fixed;
-      left: 0;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 100005;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(0, 0, 0, .45);
-      backdrop-filter: blur(2px);
-    }
-    #${KEY_PANEL_ID} .panel {
-      width: 400px;
-      max-width: calc(100vw - 40px);
-      max-height: calc(100vh - 40px);
-      overflow: auto;
-      padding: 0;
-      border-radius: 12px;
-      background: #f7f8fa;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, .22), 0 0 0 1px rgba(0, 0, 0, .04);
-      display: flex;
-      flex-direction: column;
-      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #18191c;
-    }
-    #${KEY_PANEL_ID} .panel::-webkit-scrollbar { width: 6px; }
-    #${KEY_PANEL_ID} .panel::-webkit-scrollbar-thumb { background: #d0d3d8; border-radius: 3px; }
-    #${KEY_PANEL_ID} .panel-head {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 14px 16px 12px;
-      background: #fff;
-      border-bottom: 1px solid #eceef1;
-      border-radius: 12px 12px 0 0;
-      position: sticky;
-      top: 0;
-      z-index: 1;
-    }
-    #${KEY_PANEL_ID} .panel-title { font-size: 16px; font-weight: 700; letter-spacing: .5px; flex: 1; }
-    #${KEY_PANEL_ID} .panel-title::before {
-      content: '';
-      display: inline-block;
-      width: 4px;
-      height: 14px;
-      border-radius: 2px;
-      background: #00aeec;
-      margin-right: 8px;
-      vertical-align: -2px;
-    }
-    /* Key 状态徽章：绿点=已配置，灰点=未配置 */
-    #${KEY_PANEL_ID} .panel-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 10px;
-      border-radius: 999px;
-      background: #f1f2f4;
-      color: #61666d;
-      font-size: 11px;
-      word-break: break-all;
-    }
-    #${KEY_PANEL_ID} .panel-status:not(:empty)::before {
-      content: '';
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #c9ccd0;
-      flex: none;
-    }
-    #${KEY_PANEL_ID} .panel-status.ok::before { background: #23c343; }
-    /* 分区卡片 */
-    #${KEY_PANEL_ID} .section {
-      margin: 12px 14px 0;
-      padding: 12px 12px 13px;
-      border-radius: 10px;
-      background: #fff;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, .05);
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-    }
-    #${KEY_PANEL_ID} .section:last-of-type { margin-bottom: 14px; }
-    #${KEY_PANEL_ID} .panel-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #383940;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    #${KEY_PANEL_ID} .panel-label::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: #eff1f3;
-    }
-    #${KEY_PANEL_ID} .key-input,
-    #${KEY_PANEL_ID} .text-input,
-    #${KEY_PANEL_ID} .cookie-input,
-    #${KEY_PANEL_ID} .ttl-select {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 8px 10px;
-      border: 1px solid #dcdfe4;
-      border-radius: 8px;
-      background: #fafbfc;
-      font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
-      color: #18191c;
-      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
-    }
-    #${KEY_PANEL_ID} .ttl-select { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    #${KEY_PANEL_ID} .key-input { font-size: 13px; /* 视觉遮罩：text+打点，避免触发密码管理器 */ -webkit-text-security: disc; }
-    #${KEY_PANEL_ID} .cookie-input { min-height: 64px; resize: vertical; word-break: break-all; font-size: 11px; }
-    #${KEY_PANEL_ID} .key-input:hover, #${KEY_PANEL_ID} .text-input:hover,
-    #${KEY_PANEL_ID} .cookie-input:hover, #${KEY_PANEL_ID} .ttl-select:hover { border-color: #c4c8ce; }
-    #${KEY_PANEL_ID} .key-input:focus, #${KEY_PANEL_ID} .text-input:focus,
-    #${KEY_PANEL_ID} .cookie-input:focus, #${KEY_PANEL_ID} .ttl-select:focus {
-      outline: none;
-      border-color: #00aeec;
-      background: #fff;
-      box-shadow: 0 0 0 3px rgba(0, 174, 236, .14);
-    }
-    #${KEY_PANEL_ID} .panel-test {
-      min-height: 16px;
-      font-size: 12px;
-      color: #9499a0;
-      word-break: break-all;
-    }
-    #${KEY_PANEL_ID} .panel-row { display: flex; gap: 8px; }
-    #${KEY_PANEL_ID} .panel-row.grid2 { display: grid; grid-template-columns: 1fr 1fr; }
-    #${KEY_PANEL_ID} .panel-row button { white-space: nowrap; }
-    #${KEY_PANEL_ID} .panel-row button {
-      flex: 1;
-      padding: 7px 0;
-      border: 0;
-      border-radius: 8px;
-      color: #fff;
-      background: #00aeec;
-      cursor: pointer;
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      transition: background .15s ease, transform .1s ease;
-    }
-    #${KEY_PANEL_ID} .panel-row button:hover { background: #009bd3; }
-    #${KEY_PANEL_ID} .panel-row button:active { transform: translateY(1px); }
-    #${KEY_PANEL_ID} .panel-row button.ghost {
-      background: #fff;
-      color: #383940;
-      box-shadow: inset 0 0 0 1px #dcdfe4;
-    }
-    #${KEY_PANEL_ID} .panel-row button.ghost:hover { background: #f2f6f8; box-shadow: inset 0 0 0 1px #00aeec; color: #00aeec; }
-    #${KEY_PANEL_ID} .panel-row button:disabled { cursor: wait; opacity: .55; }
-    #${KEY_PANEL_ID} .panel-hint { color: #9499a0; font-size: 11.5px; line-height: 1.6; }
-    #${KEY_PANEL_ID} .check-line {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      font-size: 12px;
-      color: #61666d;
-      cursor: pointer;
-      line-height: 1.55;
-    }
-    #${KEY_PANEL_ID} .check-line input { margin: 2px 0 0; cursor: pointer; accent-color: #00aeec; width: 14px; height: 14px; flex: none; }
-    #${KEY_PANEL_ID} .check-line:hover span { color: #18191c; }
-    #${KEY_PANEL_ID} .cache-line {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: #61666d;
-    }
-    #${KEY_PANEL_ID} .cache-line button {
-      margin-left: auto;
-      padding: 4px 12px;
-      border: 0;
-      border-radius: 6px;
-      color: #f53f3f;
-      background: #fdecec;
-      cursor: pointer;
-      font-size: 12px;
-      transition: background .15s ease;
-    }
-    #${KEY_PANEL_ID} .cache-line button:hover { background: #fbdbdb; }
-    /* 底部固定操作条：保存是全局动作，提到面板级 */
-    #${KEY_PANEL_ID} .panel-actions {
-      position: sticky;
-      bottom: 0;
-      display: flex;
-      gap: 10px;
-      padding: 12px 14px;
-      background: #fff;
-      border-top: 1px solid #eceef1;
-      border-radius: 0 0 12px 12px;
-      margin-top: auto;
-    }
-    #${KEY_PANEL_ID} .panel-actions button {
-      flex: 1;
-      padding: 9px 0;
-      border: 0;
-      border-radius: 8px;
-      cursor: pointer;
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      transition: background .15s ease, transform .1s ease;
-    }
-    #${KEY_PANEL_ID} .panel-actions button:active { transform: translateY(1px); }
-    #${KEY_PANEL_ID} .panel-actions .primary { background: #00aeec; color: #fff; }
-    #${KEY_PANEL_ID} .panel-actions .primary:hover { background: #009bd3; }
-    #${KEY_PANEL_ID} .panel-actions .plain { background: #fff; color: #61666d; box-shadow: inset 0 0 0 1px #dcdfe4; }
-    #${KEY_PANEL_ID} .panel-actions .plain:hover { color: #18191c; box-shadow: inset 0 0 0 1px #c4c8ce; }
+    /* 设置面板（v2.9.2 起）为 Shadow DOM，样式内联在 openSettingsPanel 里，这里无页面级规则 */
     #${PROGRESS_PANEL_ID} {
       position: fixed;
       z-index: 100004;
@@ -2163,165 +1953,75 @@
     }
   }
 
+  // 设置面板（v2.9.2 重设计）：Shadow DOM 隔离 + 左导航分区 + 即时保存。
+  // 交互模型：所有设置改动即时生效——开关/下拉 change 即存、文本输入 400ms
+  // 防抖即存，没有「保存」按钮，也就不存在“改了没保存被关闭丢掉”的路径。
+  // Esc / ✕ / 点遮罩均可关闭；打开/关闭有缩放淡入淡出动画；跟随系统暗色。
   function openSettingsPanel(focusKey = true) {
-    if (document.getElementById(KEY_PANEL_ID)) {
-      if (focusKey) document.getElementById(KEY_PANEL_ID).querySelector('.key-input')?.focus();
+    const existingHost = document.getElementById(KEY_PANEL_ID);
+    if (existingHost) {
+      if (focusKey) existingHost.shadowRoot?.querySelector('.key-input')?.focus();
       return;
     }
-    const overlay = document.createElement('div');
-    overlay.id = KEY_PANEL_ID;
-    const panel = document.createElement('div');
-    panel.className = 'panel';
-    const title = document.createElement('div');
-    title.className = 'panel-title';
-    title.textContent = '设置';
-    const status = document.createElement('div');
-    status.className = 'panel-status';
+    const host = document.createElement('div');
+    host.id = KEY_PANEL_ID;
+    const root = host.attachShadow({ mode: 'open' });
+
+    const mkEl = (tag, className, text) => {
+      const el = document.createElement(tag);
+      if (className) el.className = className;
+      if (text != null) el.textContent = text;
+      return el;
+    };
+
+    // ---- 状态与控件 ----
     const current = getAsrApiKey();
+    const status = mkEl('span', 'badge');
     const syncKeyStatus = value => {
-      status.textContent = value
-        ? `已配置 ${value.slice(0, 4)}****${value.slice(-4)}`
-        : '未配置 Key';
+      status.textContent = value ? '已配置 ' + value.slice(0, 4) + '****' + value.slice(-4) : '未配置 Key';
       status.classList.toggle('ok', !!value);
     };
     syncKeyStatus(current);
 
-    // ---- 分区：StepFun 语音识别 ----
-    const keyLabel = document.createElement('div');
-    keyLabel.className = 'panel-label';
-    keyLabel.textContent = 'StepFun 语音识别';
-    const input = document.createElement('input');
-    input.className = 'key-input';
-    // 用 text + CSS 遮罩代替 password 类型，避免触发浏览器“保存密码”提示。
+    const input = mkEl('input', 'key-input');
+    // 视觉遮罩：text + CSS 打点，避免触发浏览器“保存密码”提示。
     input.type = 'text';
     input.placeholder = '粘贴 StepFun API Key';
     input.value = current || '';
     input.autocomplete = 'off';
     input.spellcheck = false;
-    const endpointLabel = document.createElement('div');
-    endpointLabel.className = 'panel-label';
-    endpointLabel.textContent = '识别接口端点（SSE）';
-    const endpointInput = document.createElement('input');
-    endpointInput.className = 'text-input';
+
+    const endpointInput = mkEl('input', 'text-input');
     endpointInput.type = 'text';
-    endpointInput.placeholder = ASR_SSE_ENDPOINT;
+    endpointInput.placeholder = '默认 ' + ASR_SSE_ENDPOINT + '（留空使用默认）';
     endpointInput.value = getAsrEndpoint();
     endpointInput.spellcheck = false;
-    const langLabel = document.createElement('div');
-    langLabel.className = 'panel-label';
-    langLabel.textContent = '识别语言';
-    const langSelect = document.createElement('select');
-    langSelect.className = 'ttl-select';
+
+    const langSelect = mkEl('select', 'text-input');
     [['zh', '中文（默认）'], ['en', '英文'], ['ja', '日文']].forEach(([value, label]) => {
-      const item = document.createElement('option');
+      const item = mkEl('option', null, label);
       item.value = value;
-      item.textContent = label;
       langSelect.appendChild(item);
     });
     langSelect.value = getAsrLanguage();
-    const testResult = document.createElement('div');
-    testResult.className = 'panel-test';
-    const row = document.createElement('div');
-    row.className = 'panel-row';
-    const saveButton = document.createElement('button');
-    saveButton.textContent = '保存';
-    const clearButton = document.createElement('button');
-    clearButton.textContent = '清除 Key';
-    clearButton.className = 'ghost';
-    const testButton = document.createElement('button');
-    testButton.textContent = '测试连接';
-    testButton.className = 'ghost';
-    const cancelButton = document.createElement('button');
-    cancelButton.textContent = '取消';
-    cancelButton.className = 'ghost';
-    // 保存/取消提为面板级操作（见组装段），分区内只留 Key 相关动作。
-    row.appendChild(testButton);
-    row.appendChild(clearButton);
-    const hint = document.createElement('div');
-    hint.className = 'panel-hint';
-    hint.textContent = 'Key 与各配置仅保存在浏览器本地，不会上传到其他服务器。';
 
-    // ---- 分区：视频号 · 元宝 Cookie ----
-    const wxLabel = document.createElement('div');
-    wxLabel.className = 'panel-label';
-    wxLabel.textContent = '视频号解析 · 元宝 Cookie';
-    const cookieInput = document.createElement('textarea');
-    cookieInput.className = 'cookie-input';
+    const testResult = mkEl('div', 'test-result');
+    const cookieTestResult = mkEl('div', 'test-result');
+
+    const cookieInput = mkEl('textarea', 'cookie-input');
     cookieInput.placeholder = '粘贴 yuanbao.tencent.com 的完整 Cookie（含 HttpOnly 项）';
     cookieInput.value = getYuanbaoCookie();
     cookieInput.spellcheck = false;
-    const wxRow = document.createElement('div');
-    // 4 个按钮两行两列，避免 flex 均分下「一键读取 Cookie」文字换行。
-    wxRow.className = 'panel-row grid2';
-    const openYuanbaoButton = document.createElement('button');
-    openYuanbaoButton.textContent = '打开元宝';
-    openYuanbaoButton.className = 'ghost';
-    const readCookieButton = document.createElement('button');
-    readCookieButton.textContent = '一键读取 Cookie';
-    readCookieButton.className = 'ghost';
-    const clearCookieButton = document.createElement('button');
-    clearCookieButton.textContent = '清空 Cookie';
-    clearCookieButton.className = 'ghost';
-    const testCookieButton = document.createElement('button');
-    testCookieButton.textContent = '测试 Cookie';
-    testCookieButton.className = 'ghost';
-    wxRow.appendChild(openYuanbaoButton);
-    wxRow.appendChild(readCookieButton);
-    wxRow.appendChild(testCookieButton);
-    wxRow.appendChild(clearCookieButton);
-    const cookieTestResult = document.createElement('div');
-    cookieTestResult.className = 'panel-test';
-    cookieTestResult.textContent = '';
-    const wxHint = document.createElement('div');
-    wxHint.className = 'panel-hint';
-    wxHint.textContent = '获取方式：先在元宝登录（点「打开元宝」扫码），再点「一键读取 Cookie」自动填入并保存（自动过滤统计类字段）；若自动读取不可用，再按 F12 → Application/应用 → Cookies → yuanbao.tencent.com 全选复制（需包含 HttpOnly 项）。视频号分享链接经元宝接口解析出视频直链，Cookie 过期后需重新获取。';
 
-    // ---- 分区：调试 ----
-    const debugLabel = document.createElement('div');
-    debugLabel.className = 'panel-label';
-    debugLabel.textContent = '调试';
-    const debugLine = document.createElement('label');
-    debugLine.className = 'check-line';
-    const debugBox = document.createElement('input');
-    debugBox.type = 'checkbox';
-    debugBox.checked = getDebugEnabled();
-    const debugText = document.createElement('span');
-    debugText.textContent = '在浏览器控制台输出详细日志（排查接口问题时开启）';
-    debugLine.appendChild(debugBox);
-    debugLine.appendChild(debugText);
-
-    // ---- 分区：评论复制（默认关闭的功能开关）----
-    const commentLabel = document.createElement('div');
-    commentLabel.className = 'panel-label';
-    commentLabel.textContent = '评论复制';
-    const commentLine = document.createElement('label');
-    commentLine.className = 'check-line';
-    const commentBox = document.createElement('input');
-    commentBox.type = 'checkbox';
-    commentBox.checked = getCommentCopyEnabled();
-    const commentText = document.createElement('span');
-    commentText.textContent = '在 B 站视频页评论区标题旁显示「复制评论区 / 复制评论和字幕」按钮（关闭后不占位）';
-    commentLine.appendChild(commentBox);
-    commentLine.appendChild(commentText);
-
-    // ---- 分区：字幕缓存 ----
-    const ttlLabel = document.createElement('div');
-    ttlLabel.className = 'panel-label';
-    ttlLabel.textContent = '字幕缓存';
-    const ttlSelect = document.createElement('select');
-    ttlSelect.className = 'ttl-select';
+    const ttlSelect = mkEl('select', 'text-input');
     CACHE_TTL_OPTIONS.forEach(option => {
-      const item = document.createElement('option');
+      const item = mkEl('option', null, option.label);
       item.value = String(option.value);
-      item.textContent = option.label;
       ttlSelect.appendChild(item);
     });
     ttlSelect.value = String(getCacheTtlMs());
-    const cacheLine = document.createElement('div');
-    cacheLine.className = 'cache-line';
-    const cacheInfo = document.createElement('span');
-    const clearCacheButton = document.createElement('button');
-    clearCacheButton.textContent = '清除缓存';
+
+    const cacheInfo = mkEl('span');
     const refreshCacheLine = () => {
       const count = listCacheKeys().length;
       const sessionCount = (() => {
@@ -2331,165 +2031,337 @@
           return 0;
         }
       })();
-      cacheInfo.textContent = `已缓存 ${count + sessionCount} 条字幕/识别结果`;
+      cacheInfo.textContent = '已缓存 ' + (count + sessionCount) + ' 条字幕/识别结果';
     };
     refreshCacheLine();
-    cacheLine.appendChild(cacheInfo);
-    cacheLine.appendChild(clearCacheButton);
 
-    // 组装：页头（标题 + Key 状态徽章 + ✕）→ 分区卡片 → 底部固定操作条。
-    // 「保存/取消」是全局动作，提为面板级；StepFun 分区内保留清除/测试。
-    const mkSection = (...children) => {
-      const section = document.createElement('div');
-      section.className = 'section';
-      children.forEach(child => section.appendChild(child));
-      return section;
+    // ---- 即时保存：文本防抖 400ms，开关/下拉 change 即存 ----
+    const saveSoon = fn => {
+      let timer = 0;
+      return () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(fn, 400);
+      };
     };
-    const head = document.createElement('div');
-    head.className = 'panel-head';
-    const closeButton = document.createElement('button');
-    closeButton.type = 'button';
-    closeButton.textContent = '✕';
-    closeButton.title = '关闭';
-    closeButton.style.cssText = 'border:none;background:none;font-size:15px;color:#9499a0;cursor:pointer;padding:2px 4px;flex:none;line-height:1;';
-    closeButton.addEventListener('mouseenter', () => { closeButton.style.color = '#18191c'; });
-    closeButton.addEventListener('mouseleave', () => { closeButton.style.color = '#9499a0'; });
-    closeButton.addEventListener('click', closeSettingsPanel);
-    head.appendChild(title);
-    head.appendChild(status);
-    head.appendChild(closeButton);
-
-    const actions = document.createElement('div');
-    actions.className = 'panel-actions';
-    cancelButton.className = 'plain';
-    saveButton.className = 'primary';
-    actions.appendChild(cancelButton);
-    actions.appendChild(saveButton);
-
-    panel.appendChild(head);
-    panel.appendChild(mkSection(keyLabel, input, endpointLabel, endpointInput, langLabel, langSelect, testResult, row, hint));
-    panel.appendChild(mkSection(wxLabel, cookieInput, wxRow, cookieTestResult, wxHint));
-    const togglesLabel = document.createElement('div');
-    togglesLabel.className = 'panel-label';
-    togglesLabel.textContent = '功能开关';
-    panel.appendChild(mkSection(togglesLabel, debugLine, commentLine));
-    panel.appendChild(mkSection(ttlLabel, ttlSelect, cacheLine));
-    panel.appendChild(actions);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-    input.focus();
-
-    saveButton.addEventListener('click', () => {
-      setAsrApiKey(input.value);
-      const endpoint = endpointInput.value.trim();
-      GM_setValue(ASR_ENDPOINT_SETTING, endpoint);
-      GM_setValue(ASR_LANGUAGE_SETTING, langSelect.value);
-      GM_setValue(YUANBAO_COOKIE_SETTING, cookieInput.value.trim());
+    const input2asr = saveSoon(() => { setAsrApiKey(input.value); syncKeyStatus(getAsrApiKey()); });
+    const input2endpoint = saveSoon(() => GM_setValue(ASR_ENDPOINT_SETTING, endpointInput.value.trim()));
+    const input2cookie = saveSoon(() => GM_setValue(YUANBAO_COOKIE_SETTING, cookieInput.value.trim()));
+    input.addEventListener('input', input2asr);
+    endpointInput.addEventListener('input', input2endpoint);
+    cookieInput.addEventListener('input', input2cookie);
+    langSelect.addEventListener('change', () => GM_setValue(ASR_LANGUAGE_SETTING, langSelect.value));
+    ttlSelect.addEventListener('change', () => {
       GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
-      syncKeyStatus(getAsrApiKey());
       refreshCacheLine();
-      showToast('设置已保存');
-      // 保存后关闭：首次配置 Key 的场景可直接返回继续复制。
-      closeSettingsPanel();
+      showToast('缓存留存时间已更新');
     });
-    clearButton.addEventListener('click', () => {
-      setAsrApiKey('');
-      input.value = '';
-      testResult.textContent = '';
-      syncKeyStatus('');
-      showToast('已清除 StepFun API Key，无字幕视频将不再自动识别');
-    });
-    testButton.addEventListener('click', async () => {
+
+    // ---- 分区：StepFun 语音识别 ----
+    const mkRow = buttons => {
+      const row = mkEl('div', 'btn-row');
+      buttons.forEach(b => row.appendChild(b));
+      return row;
+    };
+    const mkGhostBtn = (text, onClick) => {
+      const btn = mkEl('button', 'ghost', text);
+      btn.type = 'button';
+      btn.addEventListener('click', onClick);
+      return btn;
+    };
+    const testButton = mkGhostBtn('测试连接', async () => {
       const value = input.value.trim();
-      if (!value) {
-        showToast('请先输入 Key');
-        return;
-      }
+      if (!value) { showToast('请先输入 Key'); return; }
       testButton.disabled = true;
       testButton.textContent = '测试中…';
       testResult.textContent = '正在测试连接…';
-      testResult.style.color = '#9499a0';
+      testResult.style.color = 'var(--muted)';
       try {
         const message = await testAsrKeyConnection(value);
         testResult.textContent = message;
-        testResult.style.color = /成功/.test(message) ? '#00b42a' : '#f53f3f';
+        testResult.style.color = /成功/.test(message) ? 'var(--ok)' : 'var(--err)';
         showToast(message);
       } finally {
         testButton.disabled = false;
         testButton.textContent = '测试连接';
       }
     });
-    cancelButton.addEventListener('click', closeSettingsPanel);
-    openYuanbaoButton.addEventListener('click', () => {
+    const clearButton = mkGhostBtn('清除 Key', () => {
+      setAsrApiKey('');
+      input.value = '';
+      testResult.textContent = '';
+      syncKeyStatus('');
+      showToast('已清除 StepFun API Key，无字幕视频将不再自动识别');
+    });
+
+    const asrPane = mkEl('div', 'pane');
+    asrPane.append(
+      mkEl('div', 'f-label', 'StepFun API Key（无字幕视频自动识别用）'),
+      input,
+      mkRow([testButton, clearButton]),
+      testResult,
+    );
+    const asrAdvanced = mkEl('details', 'adv');
+    const asrSummary = mkEl('summary', null, '高级：接口端点 / 识别语言');
+    const advBody = mkEl('div', 'adv-body');
+    advBody.append(
+      mkEl('div', 'f-label', '识别接口端点（SSE，留空用默认）'),
+      endpointInput,
+      mkEl('div', 'f-label', '识别语言'),
+      langSelect,
+    );
+    asrAdvanced.append(asrSummary, advBody);
+    asrPane.append(asrAdvanced, mkEl('div', 'hint', 'Key 与各配置仅保存在浏览器本地，不会上传到其他服务器。'));
+
+    // ---- 分区：视频号 · 元宝 Cookie ----
+    const wxPane = mkEl('div', 'pane');
+    const openYuanbaoButton = mkGhostBtn('打开元宝', () => {
       if (typeof window.open === 'function') window.open(YUANBAO_HOME, '_blank', 'noopener');
       showToast('已打开元宝，登录后点「一键读取 Cookie」');
     });
-    readCookieButton.addEventListener('click', async () => {
+    const readCookieButton = mkGhostBtn('一键读取 Cookie', async () => {
       readCookieButton.disabled = true;
       readCookieButton.textContent = '读取中…';
       try {
         const { cookieString, useful } = await readYuanbaoCookieAutomatically();
         cookieInput.value = cookieString;
         GM_setValue(YUANBAO_COOKIE_SETTING, cookieString);
-        showToast(`已读取并保存 ${useful} 个 Cookie 字段（已过滤统计类）`);
+        showToast('已读取并保存 ' + useful + ' 个 Cookie 字段（已过滤统计类）');
       } catch (error) {
-        showToast(`自动读取失败：${error.message || error}，请按提示用 F12 手动复制`);
+        showToast('自动读取失败：' + (error.message || error) + '，请按提示用 F12 手动复制');
       } finally {
         readCookieButton.disabled = false;
         readCookieButton.textContent = '一键读取 Cookie';
       }
     });
-    clearCookieButton.addEventListener('click', () => {
-      cookieInput.value = '';
-      GM_setValue(YUANBAO_COOKIE_SETTING, '');
-      cookieTestResult.textContent = '';
-      showToast('已清空元宝 Cookie');
-    });
-    testCookieButton.addEventListener('click', async () => {
+    const testCookieButton = mkGhostBtn('测试 Cookie', async () => {
       const cookie = cookieInput.value.trim() || getYuanbaoCookie();
       testCookieButton.disabled = true;
       testCookieButton.textContent = '测试中…';
       cookieTestResult.textContent = '正在测试元宝登录态…';
-      cookieTestResult.style.color = '#9499a0';
+      cookieTestResult.style.color = 'var(--muted)';
       try {
         const message = await testYuanbaoCookie(cookie);
         cookieTestResult.textContent = message;
-        cookieTestResult.style.color = /有效/.test(message) ? '#00b42a' : '#f53f3f';
+        cookieTestResult.style.color = /有效/.test(message) ? 'var(--ok)' : 'var(--err)';
         showToast(message);
       } finally {
         testCookieButton.disabled = false;
         testCookieButton.textContent = '测试 Cookie';
       }
     });
-    debugBox.addEventListener('change', () => {
-      GM_setValue(DEBUG_SETTING, debugBox.checked === true);
-      showToast(debugBox.checked ? '调试日志已开启' : '调试日志已关闭');
+    const clearCookieButton = mkGhostBtn('清空 Cookie', () => {
+      cookieInput.value = '';
+      GM_setValue(YUANBAO_COOKIE_SETTING, '');
+      cookieTestResult.textContent = '';
+      showToast('已清空元宝 Cookie');
     });
-    commentBox.addEventListener('change', () => {
-      GM_setValue(COMMENT_COPY_SETTING, commentBox.checked === true);
+    const wxGrid = mkEl('div', 'btn-row grid2');
+    wxGrid.append(openYuanbaoButton, readCookieButton, testCookieButton, clearCookieButton);
+    wxPane.append(
+      mkEl('div', 'f-label', 'yuanbao.tencent.com 的 Cookie（视频号解析用）'),
+      cookieInput,
+      wxGrid,
+      cookieTestResult,
+    );
+    const wxHelp = mkEl('details', 'adv');
+    wxHelp.append(
+      mkEl('summary', null, 'Cookie 获取方式'),
+      mkEl('div', 'hint adv-body', '先在元宝登录（点「打开元宝」扫码），再点「一键读取 Cookie」自动填入（自动过滤统计类字段）；若自动读取不可用，按 F12 → Application → Cookies → yuanbao.tencent.com 全选复制（需含 HttpOnly 项）。Cookie 过期后需重新获取。'),
+    );
+    wxPane.append(wxHelp);
+
+    // ---- 分区：功能开关（toggle switch） ----
+    const mkSwitchRow = (title, desc, checked, onChange) => {
+      const row = mkEl('label', 'switch-row');
+      const txt = mkEl('span', 'txt');
+      const b = mkEl('b', null, title);
+      const small = mkEl('small', null, desc);
+      txt.append(b, small);
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = checked;
+      const knob = mkEl('span', 'knob');
+      const sw = mkEl('span', 'switch');
+      sw.append(box, knob);
+      box.addEventListener('change', () => onChange(box.checked));
+      row.append(txt, sw);
+      return row;
+    };
+    const togglesPane = mkEl('div', 'pane');
+    const debugRow = mkSwitchRow('调试日志', '在浏览器控制台输出详细日志（排查接口问题时开启）', getDebugEnabled(), checked => {
+      GM_setValue(DEBUG_SETTING, checked === true);
+      showToast(checked ? '调试日志已开启' : '调试日志已关闭');
+    });
+    const commentRow = mkSwitchRow('评论复制', '在 B 站视频页评论区标题旁显示「复制评论区 / 复制评论和字幕」按钮（关闭后约 1.5s 内消失）', getCommentCopyEnabled(), checked => {
+      GM_setValue(COMMENT_COPY_SETTING, checked === true);
       // 入口挂在评论区组件的 Shadow DOM 里，由 mountCommentButtons 的 1.5s 巡检
       // 按设置自动挂载/摘除，这里只存值即可，无需手动处理 DOM。
-      showToast(commentBox.checked
-        ? '评论复制已开启：滚动到评论区，标题旁出现「复制评论区 / 复制评论和字幕」'
-        : '评论复制已关闭');
+      showToast(checked ? '评论复制已开启：滚动到评论区，标题旁出现「复制评论区 / 复制评论和字幕」' : '评论复制已关闭');
     });
-    ttlSelect.addEventListener('change', () => {
-      GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
-      refreshCacheLine();
-      showToast('缓存留存时间已更新');
-    });
+    togglesPane.append(debugRow, commentRow);
+
+    // ---- 分区：字幕缓存 ----
+    const cachePane = mkEl('div', 'pane');
+    const cacheLine = mkEl('div', 'cache-line');
+    const clearCacheButton = mkEl('button', 'danger', '清除缓存');
+    clearCacheButton.type = 'button';
     clearCacheButton.addEventListener('click', () => {
       clearAllCaches();
       refreshCacheLine();
       showToast('已清除全部字幕缓存');
     });
-    overlay.addEventListener('click', event => {
-      if (event.target === overlay) closeSettingsPanel();
+    cacheLine.append(cacheInfo, clearCacheButton);
+    cachePane.append(
+      mkEl('div', 'f-label', '字幕/识别结果留存时间'),
+      ttlSelect,
+      cacheLine,
+      mkEl('div', 'hint', '缓存按 视频:分P:语言 隔离；留存在浏览器本地，清空后已复制/识别过的内容需要重新获取。'),
+    );
+
+    // ---- 布局：页头 + 左导航 + 内容区 ----
+    const panes = [
+      { id: 'asr', nav: '语音识别', icon: '🎙', pane: asrPane },
+      { id: 'wx', nav: '视频号', icon: '💬', pane: wxPane },
+      { id: 'toggles', nav: '功能开关', icon: '⚙', pane: togglesPane },
+      { id: 'cache', nav: '字幕缓存', icon: '🗂', pane: cachePane },
+    ];
+    const overlay = mkEl('div', 'overlay');
+    const panel = mkEl('div', 'panel');
+    const head = mkEl('div', 'head');
+    const title = mkEl('div', 'title', '设置');
+    const autoNote = mkEl('span', 'autosave', '更改即时生效');
+    const closeButton = mkEl('button', 'x', '✕');
+    closeButton.type = 'button';
+    closeButton.title = '关闭（Esc）';
+    closeButton.setAttribute('aria-label', '关闭设置');
+    closeButton.addEventListener('click', closeSettingsPanel);
+    head.append(title, status, autoNote, closeButton);
+
+    const body = mkEl('div', 'body');
+    const side = mkEl('nav', 'side');
+    const content = mkEl('div', 'content');
+    const navButtons = new Map();
+    panes.forEach(({ id, nav, icon, pane }) => {
+      const navBtn = mkEl('button', 'nav-item', icon + ' ' + nav);
+      navBtn.type = 'button';
+      navBtn.addEventListener('click', () => {
+        navButtons.forEach((btn, key) => {
+          btn.classList.toggle('active', key === id);
+          panes.find(x => x.id === key).pane.classList.toggle('active', key === id);
+        });
+        const first = pane.querySelector('input, select, textarea');
+        if (first) first.focus({ preventScroll: true });
+      });
+      navButtons.set(id, navBtn);
+      side.appendChild(navBtn);
+      content.appendChild(pane);
     });
+    navButtons.get('asr').classList.add('active');
+    asrPane.classList.add('active');
+
+    panel.append(head, body);
+    body.append(side, content);
+    overlay.appendChild(panel);
+
+    const style = document.createElement('style');
+    style.textContent = [
+      ':host { all: initial }',
+      ':host { font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }',
+      // 主题变量必须挂在 :host 上——shadow 内 :root 不匹配任何元素。
+      ':host {',
+      '  --bg: #ffffff; --bg-soft: #f6f7f9; --line: #e7e9ec; --text: #18191c; --text2: #61666d;',
+      '  --muted: #9499a0; --accent: #00aeec; --accent-weak: rgba(0,174,236,.14);',
+      '  --ok: #23c343; --err: #f53f3f; --track: #d4d7dc; --danger-bg: #fdecec; --danger: #f53f3f;',
+      '}',
+      '@media (prefers-color-scheme: dark) { :host { --bg: #232527; --bg-soft: #1d1f21; --line: #33363a; --text: #e2e4e8; --text2: #a8adb5; --muted: #7d838c; --accent: #23ade5; --accent-weak: rgba(35,173,229,.18); --track: #45494f; --danger-bg: #3a2626; } }',
+      '.overlay { position: fixed; inset: 0; z-index: 2147483646; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); color: var(--text); animation: fadein .15s ease-out; }',
+      '.overlay.closing { animation: fadeout .12s ease-in forwards; }',
+      '.panel { width: 600px; max-width: calc(100vw - 32px); height: 440px; max-height: calc(100vh - 40px); background: var(--bg); border-radius: 14px; box-shadow: 0 16px 48px rgba(0,0,0,.28), 0 0 0 1px var(--line); display: flex; flex-direction: column; overflow: hidden; animation: pop .18s cubic-bezier(.2,.9,.3,1.2); }',
+      '.overlay.closing .panel { animation: popout .12s ease-in forwards; }',
+      '.head { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }',
+      '.title { font-size: 15px; font-weight: 700; letter-spacing: .5px; display: flex; align-items: center; gap: 8px; }',
+      '.title::before { content: ""; width: 4px; height: 15px; border-radius: 2px; background: var(--accent); }',
+      '.badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; background: var(--bg-soft); color: var(--text2); font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
+      '.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }',
+      '.badge.ok::before { background: var(--ok); }',
+      '.autosave { font-size: 11px; color: var(--muted); margin-left: auto; }',
+      '.x { border: none; background: none; font-size: 15px; line-height: 1; color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 6px; flex: none; }',
+      '.x:hover { color: var(--text); background: var(--bg-soft); }',
+      '.body { flex: 1; display: flex; min-height: 0; }',
+      '.side { flex: none; width: 128px; border-right: 1px solid var(--line); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; background: var(--bg); }',
+      '.nav-item { border: none; background: none; text-align: left; padding: 8px 10px; border-radius: 8px; font-size: 13px; line-height: 1.4; font-family: inherit; color: var(--text2); cursor: pointer; }',
+      '.nav-item:hover { background: var(--bg-soft); color: var(--text); }',
+      '.nav-item.active { background: var(--accent-weak); color: var(--accent); font-weight: 600; }',
+      '.content { flex: 1; overflow: auto; padding: 14px 16px; }',
+      '.content::-webkit-scrollbar { width: 6px; }',
+      '.content::-webkit-scrollbar-thumb { background: var(--track); border-radius: 3px; }',
+      '.pane { display: none; flex-direction: column; gap: 10px; }',
+      '.pane.active { display: flex; }',
+      '.f-label { font-size: 12px; font-weight: 600; color: var(--text2); }',
+      '.key-input, .text-input, .cookie-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-soft); color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; transition: border-color .15s, box-shadow .15s, background .15s; }',
+      '.text-input { font-family: inherit; }',
+      '.key-input { font-size: 13px; -webkit-text-security: disc; }',
+      '.cookie-input { min-height: 72px; resize: vertical; word-break: break-all; font-size: 11px; }',
+      '.key-input:hover, .text-input:hover, .cookie-input:hover { border-color: var(--muted); }',
+      '.key-input:focus, .text-input:focus, .cookie-input:focus { outline: none; border-color: var(--accent); background: var(--bg); box-shadow: 0 0 0 3px var(--accent-weak); }',
+      '.btn-row { display: flex; gap: 8px; }',
+      '.btn-row.grid2 { display: grid; grid-template-columns: 1fr 1fr; }',
+      '.btn-row button { flex: 1; padding: 7px 0; border: 0; border-radius: 8px; color: var(--text); background: var(--bg-soft); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; font-size: 12.5px; line-height: 1.4; font-family: inherit; white-space: nowrap; transition: color .15s, box-shadow .15s, background .15s; }',
+      '.btn-row button:hover { box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }',
+      '.btn-row button:active { transform: translateY(1px); }',
+      '.btn-row button:disabled { cursor: wait; opacity: .55; }',
+      '.test-result { min-height: 16px; font-size: 12px; color: var(--muted); word-break: break-all; }',
+      '.hint { color: var(--muted); font-size: 11.5px; line-height: 1.6; }',
+      'details.adv { border: 1px solid var(--line); border-radius: 8px; }',
+      'details.adv summary { padding: 8px 10px; font-size: 12px; color: var(--text2); cursor: pointer; user-select: none; list-style: none; display: flex; align-items: center; justify-content: space-between; }',
+      'details.adv summary::-webkit-details-marker { display: none; }',
+      'details.adv summary::after { content: "▸"; transition: transform .15s; }',
+      'details.adv[open] summary::after { transform: rotate(90deg); }',
+      'details.adv .adv-body { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }',
+      '.switch-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }',
+      '.switch-row:hover { border-color: var(--muted); }',
+      '.switch-row .txt { flex: 1; min-width: 0; }',
+      '.switch-row b { display: block; font-size: 13px; color: var(--text); margin-bottom: 2px; }',
+      '.switch-row small { color: var(--muted); font-size: 11.5px; line-height: 1.5; display: block; }',
+      '.switch { position: relative; width: 40px; height: 22px; flex: none; }',
+      '.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }',
+      '.switch .knob { position: absolute; inset: 0; border-radius: 999px; background: var(--track); transition: background .18s; pointer-events: none; }',
+      '.switch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .18s; }',
+      '.switch input:checked + .knob { background: var(--accent); }',
+      '.switch input:checked + .knob::after { transform: translateX(18px); }',
+      '.switch input:focus-visible + .knob { outline: 2px solid var(--accent); outline-offset: 2px; }',
+      '.cache-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }',
+      '.danger { margin-left: auto; padding: 5px 14px; border: 0; border-radius: 6px; color: var(--danger); background: var(--danger-bg); cursor: pointer; font-size: 12px; line-height: 1.4; font-family: inherit; }',
+      '.danger:hover { filter: brightness(.96); }',
+      '@keyframes fadein { from { opacity: 0 } }',
+      '@keyframes fadeout { to { opacity: 0 } }',
+      '@keyframes pop { from { opacity: 0; transform: scale(.96) } }',
+      '@keyframes popout { to { opacity: 0; transform: scale(.96) } }',
+      '@media (max-width: 520px) { .body { flex-direction: column } .side { width: auto; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto } .nav-item { flex: none; } }',
+    ].join('\n');
+    root.append(style, overlay);
+    document.body.appendChild(host);
+
+    // Esc 关闭：监听器随面板生命周期增删（closeSettingsPanel 负责移除）。
+    settingsKeydownHandler = e => { if (e.key === 'Escape') closeSettingsPanel(); };
+    window.addEventListener('keydown', settingsKeydownHandler);
+    overlay.addEventListener('click', event => { if (event.target === overlay) closeSettingsPanel(); });
+    if (focusKey) input.focus();
   }
 
+  let settingsKeydownHandler = null;
+
   function closeSettingsPanel() {
-    document.getElementById(KEY_PANEL_ID)?.remove();
+    const host = document.getElementById(KEY_PANEL_ID);
+    if (!host) return;
+    if (settingsKeydownHandler) {
+      window.removeEventListener('keydown', settingsKeydownHandler);
+      settingsKeydownHandler = null;
+    }
+    // 关闭动画：overlay 加 .closing，120ms 后整体移除。
+    const overlay = host.shadowRoot?.querySelector('.overlay');
+    if (overlay) overlay.classList.add('closing');
+    window.setTimeout(() => host.remove(), 120);
   }
 
   let progressTimer = 0;
