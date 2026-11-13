@@ -181,6 +181,45 @@ function check(name, ok, detail) {
   check('silent 模式返回文本但不写剪贴板', !!out6 && out6.includes('热评一') && clip.text === null);
   check('silent 模式不发成功 toast', toasts.length === 0, toasts);
 
+  // 场景8/9/10：按页容错——单页失败保留结果；第一页失败整体失败；连续失败止损
+  const buildRunner = fetchStub => new Function(
+    'commentCopyCancelled', 'COMMENT_PAGE_SIZE', 'fetchCommentPage', 'collectSubReplies', 'formatCommentBlock',
+    'writeClipboard', 'showToast', 'window', 'console', 'jitterDelay',
+    extractFunction('runCommentCopy') + '\nreturn runCommentCopy;')(
+    false, 20, fetchStub,
+    async () => [],
+    (reply, subs, ownerMid, badge) => `${badge || ''}|${reply.member.uname}`,
+    async text => { clip.text = text; },
+    msg => toasts.push(msg),
+    { setTimeout: fn => Promise.resolve().then(fn) },
+    { warn: () => {} },
+    () => Promise.resolve(),
+  );
+  // 场景8：第二页失败 → 保留第一页结果并报失败页
+  const runner8 = buildRunner(async (aid, { pn }) => {
+    if (pn === 1) return { replies: Array.from({ length: 20 }, (_, i) => mkReply({ rpid: 200 + i, member: { mid: String(i), uname: '页一' + i } })), total: 22, pinned: null };
+    if (pn === 2) throw new Error('接口返回 HTTP 412');
+    return { replies: [r1, r2], total: 22, pinned: null }; // pn=3 恢复正常（验证失败后能续翻）
+  });
+  clip.text = null; toasts.length = 0;
+  const out8 = await runner8(1, UP_MID, { sort: '2', limit: 0, includeSubs: false }, ui);
+  check('单页失败后能续翻（首页20条+后续2条）', !!out8 && out8.includes('页一0') && out8.includes('热评一'), out8 && out8.slice(-40));
+  check('toast 报失败页码', toasts.some(t => t.includes('失败页：2')), toasts);
+  // 场景9：第一页失败 → 整体失败
+  const runner9 = buildRunner(async () => { throw new Error('接口返回 HTTP 412'); });
+  clip.text = null; toasts.length = 0;
+  const out9 = await runner9(1, UP_MID, { sort: '2', limit: 100, includeSubs: false }, ui);
+  check('第一页失败 → 返回 null 且提示', out9 === null && toasts.some(t => t.includes('HTTP 412')), toasts);
+  // 场景10：翻页被墙（pn≥2 恒失败）→ 连续 3 页失败即止损，保留首页结果
+  const runner10 = buildRunner(async (aid, { pn }) => {
+    if (pn === 1) return { replies: Array.from({ length: 20 }, (_, i) => mkReply({ rpid: 100 + i, member: { mid: String(i), uname: '第' + i + '条' } })), total: 5817, pinned: null };
+    throw new Error('接口返回 HTTP 412'); // 访客翻页被墙
+  });
+  clip.text = null; toasts.length = 0;
+  const out10 = await runner10(1, UP_MID, { sort: '2', limit: 100, includeSubs: false }, ui);
+  check('翻页被墙止损：保留首页 20 条', !!out10 && out10.split('\n\n').length === 20 && out10.includes('第0条'), out10 && out10.slice(0, 40));
+  check('失败页 toast 只报 3 页（2/3/4）', toasts.some(t => t.includes('失败页：2、3、4')), toasts);
+
   console.log(`\n结果: ${passed} 通过, ${failed} 失败`);
   process.exit(failed ? 1 : 0);
 })().catch(e => { console.error('测试崩溃:', e); process.exit(1); });
