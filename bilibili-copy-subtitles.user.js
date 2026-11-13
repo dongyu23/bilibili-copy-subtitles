@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.8.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。
+// @version      2.9.0
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时仅评论并说明），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -54,6 +54,11 @@
   const WX_BUTTON_ID = 'bili-copy-wxchannels-button';
   const SETTINGS_BUTTON_ID = 'bili-copy-settings-button';
   const CLEAR_CACHE_BUTTON_ID = 'bili-copy-clear-cache-button';
+  const COMMENT_PANEL_HOST_ID = 'bili-sub-comment-host';
+  // 评论区标题旁的入口容器（挂在 bili-comments 头部渲染器的 #navbar 里，Shadow DOM 内）
+  const COMMENT_ENTRY_ID = 'bili-copy-comment-entry';
+  // 左下角竖条的「字幕列表」按钮：直接打开检索面板的「全部字幕」视图
+  const FIND_LIST_BUTTON_ID = 'bili-copy-subtitle-list-button';
   // v6 起缓存带留存时间；仅本次会话的缓存走 sessionStorage，跨会话走 Tampermonkey 存储。
   const META_CACHE_PREFIX = 'video-subtitles-meta-v6:';
   const BODY_CACHE_PREFIX = 'video-subtitles-body-v6:';
@@ -86,6 +91,8 @@
   const ASR_ENDPOINT_SETTING = 'bili-copy-subtitles-asr-endpoint-v1';
   const ASR_LANGUAGE_SETTING = 'bili-copy-subtitles-asr-language-v1';
   const DEBUG_SETTING = 'bili-copy-subtitles-debug-v1';
+  // 评论复制（v2.9.0）：默认关闭的功能开关，开启后才在视频页挂入口。
+  const COMMENT_COPY_SETTING = 'bili-copy-subtitles-comment-copy-v1';
   const WX_PANEL_ID = 'bili-copy-wxchannels-panel';
   // 小于该体积的视频整包按 m4a 送识别；超过则浏览器内解码提取 16k 单声道 WAV 后分片送。
   const WX_MAX_WHOLE_BYTES = 20 * 1024 * 1024;
@@ -162,6 +169,10 @@
 
   function getDebugEnabled() {
     return GM_getValue(DEBUG_SETTING, false) === true;
+  }
+
+  function getCommentCopyEnabled() {
+    return GM_getValue(COMMENT_COPY_SETTING, false) === true;
   }
 
   function getYuanbaoCookie() {
@@ -326,6 +337,22 @@
       transition: background .18s ease, color .18s ease;
     }
     #${UPLOAD_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
+    /* 字幕列表入口：与上传/视频号同级，打开检索面板的「全部字幕」视图。 */
+    #${FIND_LIST_BUTTON_ID} {
+      width: 100%;
+      min-height: 30px;
+      padding: 5px 8px;
+      border: 1px solid rgba(0, 0, 0, .12);
+      border-radius: 6px;
+      color: #61666d;
+      background: rgba(255, 255, 255, .92);
+      font: 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      cursor: pointer;
+      transition: background .18s ease, color .18s ease;
+    }
+    #${FIND_LIST_BUTTON_ID}:hover { background: #fff; color: #00aeec; }
+    /* 评论复制入口挂在评论区标题旁的 Shadow DOM 里，页面级 CSS 够不着，
+       全部用内联样式（见 mountCommentButtons），这里不再需要样式规则。 */
     /* 工具行：齿轮与清缓存并排一行（旧版各占一整行，两个小图标竖着叠显得零散）。 */
     #${CONTROLS_ID} .tools-row {
       display: flex;
@@ -1528,6 +1555,18 @@
   // 字幕行的唯一缓存源。整篇、章节、检索三条链路都从这里取原始 [{from,to,content}]，
   // 各自在内存里派生——避免"整篇一份字符串 + 每个章节组合各一份字符串"的重复占用，
   // 也避免整篇取过之后章节还要再拉一次。ASR 结果没有时间戳，仍走 BODY_CACHE_PREFIX。
+
+  // ASR 纯文本 → 带"伪时间点"的字幕行：识别结果没有时间戳，按句末标点/换行切句
+  // 后把总时长均摊到每句，让检索/列表至少能跳到大致进度。检索面板内识别与
+  // “回填已识别结果”两条路径共用这一份逻辑。
+  function buildPseudoSubtitleLines(text, totalSeconds) {
+    const chunks = String(text).split(/(?<=[。！？!?\n])/);
+    const total = Math.max(1, Number(totalSeconds) || 0);
+    return chunks
+      .map((c, i) => ({ from: (i / chunks.length) * total, to: ((i + 1) / chunks.length) * total, content: c.trim() }))
+      .filter(x => x.content);
+  }
+
   async function loadSubtitleLines(videoArg) {
     const video = videoArg || resolveCurrentVideo();
     const videoKey = videoCacheKey(video);
@@ -1549,6 +1588,7 @@
   }
 
   // 面板。Shadow DOM 骨架沿用 showChapterPanel，避免被页面 CSS 穿透。
+  // v2.9.0：无模式开关——输入框有字列命中、没字列全部字幕，视图由输入内容决定。
   function openSubtitleFind() {
     if (document.getElementById(FIND_PANEL_HOST_ID)) {
       // 已打开则聚焦输入框并全选，不开第二个
@@ -1571,9 +1611,6 @@
       .q:focus{border-color:#00aeec}
       .count{font-size:12px;color:#888;flex:none;white-space:nowrap}
       .count b{color:#00aeec;font-weight:600}
-      .mode{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:5px 10px;font-size:12px;color:#555;cursor:pointer;flex:none;white-space:nowrap}
-      .mode:hover{border-color:#00aeec;color:#00aeec}
-      .mode.on{background:#00aeec;border-color:#00aeec;color:#fff}
       .x{border:none;background:none;color:#999;cursor:pointer;font-size:18px;line-height:1;padding:2px 6px;flex:none}
       .x:hover{color:#333}
       .list{overflow-y:auto;padding:6px 0;flex:1;min-height:60px}
@@ -1605,24 +1642,20 @@
     const input = document.createElement('input');
     input.className = 'q';
     input.type = 'text';
-    input.placeholder = '检索字幕内容…';
     input.spellcheck = false;
     // 恢复上次的检索词，重开后直接接着看
     input.value = subtitleFindLastQuery;
     const count = document.createElement('span');
     count.className = 'count';
-    // 「全部字幕」模式开关：不输入关键字也能逐条点字幕跳转
-    const allBtn = document.createElement('button');
-    allBtn.className = 'mode';
-    allBtn.type = 'button';
-    allBtn.textContent = '全部字幕';
-    allBtn.title = '列出全部分P字幕，点击任意一条跳转到对应时间点';
+    // v2.9.0：不再有「全部字幕/返回命中」模式开关——输入框有字就筛选、
+    // 没字就展示全部，视图完全由输入内容决定。
+    input.placeholder = '输入关键字筛选，留空显示全部字幕…';
     const closeBtn = document.createElement('button');
     closeBtn.className = 'x';
     closeBtn.type = 'button';
     closeBtn.textContent = '✕';
     closeBtn.title = '关闭（Esc）';
-    top.append(input, allBtn, count, closeBtn);
+    top.append(input, count, closeBtn);
 
     const list = document.createElement('div');
     list.className = 'list';
@@ -1656,8 +1689,6 @@
     let cur = -1;              // 当前命中下标
     let loadFailed = null;
     let asrBusy = false;
-    // 'hits' = 命中列表；'all' = 全量字幕列表（不检索也能点着跳转）
-    let mode = 'hits';
 
     const escapeHtml = s => String(s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1730,8 +1761,6 @@
     };
 
     const render = () => {
-      allBtn.classList.toggle('on', mode === 'all');
-      allBtn.textContent = mode === 'all' ? '返回命中' : '全部字幕';
       list.onscroll = null;
       if (loadFailed) {
         const box = renderEmpty(loadFailed);
@@ -1764,14 +1793,8 @@
         prevBtn.disabled = nextBtn.disabled = true;
         return;
       }
-      // 全量模式：忽略检索词，直接列全部字幕
-      if (mode === 'all') { renderAll(); return; }
-      if (!input.value.trim()) {
-        renderEmpty('输入关键字开始检索字幕');
-        count.textContent = `${lines.length} 条字幕`;
-        prevBtn.disabled = nextBtn.disabled = true;
-        return;
-      }
+      // 视图由输入内容决定：没字列全部字幕，有字列命中。
+      if (!input.value.trim()) { renderAll(); return; }
       if (!matches.length) {
         renderEmpty('没有匹配的字幕');
         count.textContent = '0 命中';
@@ -1852,20 +1875,17 @@
           }
         }
         if (!text) { showToast('识别结果为空'); asrBusy = false; render(); return; }
-        // 识别结果无时间戳，按句号/问号/感叹号/换行切成带"伪时间点"的行，
-        // 让检索至少能跳到大致的进度位置。
-        const chunks = String(text).split(/(?<=[。！？!?\n])/);
-        const total = Math.max(1, Number(track.duration) || 0);
-        lines = chunks
-          .map((c, i) => ({ from: (i / chunks.length) * total, to: ((i + 1) / chunks.length) * total, content: c.trim() }))
-          .filter(x => x.content);
+        // 识别结果无时间戳，切成带"伪时间点"的行（共享分句逻辑，见 buildPseudoSubtitleLines）。
+        lines = buildPseudoSubtitleLines(text, track.duration);
         if (!lines.length) { showToast('识别结果为空'); asrBusy = false; render(); return; }
         const asrLinesKey = `${SUBTITLE_LINES_PREFIX}${videoKey}:asr`;
         writeCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`, encodeSubtitleLines(lines));
         pruneSubtitleLinesCache(asrLinesKey);
         asrBusy = false;
         showToast('识别完成，可以开始检索');
-        render();
+        // 必须 runSearch 而不是 render：matches 还是打开面板时对空 lines 算的 []，
+        // 有历史检索词时 render 会走“没有匹配”分支，与 toast 矛盾。
+        runSearch();
         input.focus();
       } catch (error) {
         console.error('[复制字幕][检索]', error);
@@ -1878,15 +1898,8 @@
     // ---- 事件 ----
     let debounce = 0;
     input.addEventListener('input', () => {
-      // 一输入就回到命中模式，避免停在"全部字幕"里却看不到筛选效果
-      if (mode === 'all') { mode = 'hits'; }
       window.clearTimeout(debounce);
       debounce = window.setTimeout(runSearch, 120);
-    });
-    allBtn.addEventListener('click', () => {
-      mode = mode === 'all' ? 'hits' : 'all';
-      if (mode === 'hits' && input.value.trim()) runSearch();
-      else render();
     });
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); go(cur + (e.shiftKey ? -1 : 1), true); }
@@ -1919,11 +1932,38 @@
     // ---- 加载字幕 ----
     render();
     loadSubtitleLines()
-      .then(res => {
+      .then(async res => {
         lines = res ? res.lines : [];
-        render();
-        // 有恢复的检索词就自动重跑，重开后直接接着上次的结果看
-        if (subtitleFindLastQuery.trim()) runSearch();
+        // 平台没有字幕、但之前识别过（正文缓存在 BODY_CACHE_PREFIX）：直接回填
+        // 成伪时间行，Ctrl+F 一开就能检索，不必再点「语音识别后检索」。
+        if (!lines.length) {
+          try {
+            const video = resolveCurrentVideo();
+            const videoKey = videoCacheKey(video);
+            const cachedLines = readCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`);
+            if (cachedLines) {
+              lines = normalizeSubtitleLines(cachedLines);
+            } else {
+              const text = readCache(BODY_CACHE_PREFIX, `${videoKey}:asr-v3:full`);
+              if (text) {
+                // 时长优先取播放器（零请求），拿不到再问一次音频接口。
+                const playerDuration = Number(document.querySelector('video')?.duration) || 0;
+                const total = playerDuration > 0
+                  ? playerDuration
+                  : (Number((await fetchAudioTrack(video).catch(() => null))?.duration) || 0);
+                lines = buildPseudoSubtitleLines(text, total);
+                if (lines.length) {
+                  writeCache(SUBTITLE_LINES_PREFIX, `${videoKey}:asr`, encodeSubtitleLines(lines));
+                  pruneSubtitleLinesCache(`${SUBTITLE_LINES_PREFIX}${videoKey}:asr`);
+                }
+              }
+            }
+          } catch (error) {
+            console.warn('[复制字幕][检索] 回填识别结果失败', error);
+          }
+        }
+        // 渲染由输入内容决定：没字列全部，有字（恢复的上次检索词）列命中。
+        runSearch();
       })
       .catch(error => {
         console.error('[复制字幕][检索]', error);
@@ -2145,6 +2185,20 @@
     debugLine.appendChild(debugBox);
     debugLine.appendChild(debugText);
 
+    // ---- 分区：评论复制（默认关闭的功能开关）----
+    const commentLabel = document.createElement('div');
+    commentLabel.className = 'panel-label';
+    commentLabel.textContent = '评论复制';
+    const commentLine = document.createElement('label');
+    commentLine.className = 'check-line';
+    const commentBox = document.createElement('input');
+    commentBox.type = 'checkbox';
+    commentBox.checked = getCommentCopyEnabled();
+    const commentText = document.createElement('span');
+    commentText.textContent = '在 B 站视频页评论区标题旁显示「复制评论区 / 复制评论和字幕」按钮（关闭后不占位）';
+    commentLine.appendChild(commentBox);
+    commentLine.appendChild(commentText);
+
     // ---- 分区：字幕缓存 ----
     const ttlLabel = document.createElement('div');
     ttlLabel.className = 'panel-label';
@@ -2196,6 +2250,8 @@
     panel.appendChild(wxHint);
     panel.appendChild(debugLabel);
     panel.appendChild(debugLine);
+    panel.appendChild(commentLabel);
+    panel.appendChild(commentLine);
     panel.appendChild(ttlLabel);
     panel.appendChild(ttlSelect);
     panel.appendChild(cacheLine);
@@ -2289,6 +2345,14 @@
     debugBox.addEventListener('change', () => {
       GM_setValue(DEBUG_SETTING, debugBox.checked === true);
       showToast(debugBox.checked ? '调试日志已开启' : '调试日志已关闭');
+    });
+    commentBox.addEventListener('change', () => {
+      GM_setValue(COMMENT_COPY_SETTING, commentBox.checked === true);
+      // 入口挂在评论区组件的 Shadow DOM 里，由 mountCommentButtons 的 1.5s 巡检
+      // 按设置自动挂载/摘除，这里只存值即可，无需手动处理 DOM。
+      showToast(commentBox.checked
+        ? '评论复制已开启：滚动到评论区，标题旁出现「复制评论区 / 复制评论和字幕」'
+        : '评论复制已关闭');
     });
     ttlSelect.addEventListener('change', () => {
       GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
@@ -4236,7 +4300,17 @@
       button.dataset.hidden = String(isHidden());
       button.addEventListener('click', copyAllSubtitles);
       controls.appendChild(button);
+      // 字幕列表：免按 Ctrl+F，一键打开检索面板的「全部字幕」视图逐条点着跳转。
+      const findListButton = document.createElement('button');
+      findListButton.id = FIND_LIST_BUTTON_ID;
+      findListButton.type = 'button';
+      findListButton.textContent = '字幕列表';
+      findListButton.title = '打开全部字幕列表，点击任意一条跳转到对应时间点（与 Ctrl+F 相同）';
+      findListButton.dataset.hidden = String(isHidden());
+      findListButton.addEventListener('click', () => openSubtitleFind());
+      controls.appendChild(findListButton);
     }
+    // 评论复制入口不在竖条上（v2.9.0 改挂评论区标题旁，见 mountCommentButtons）。
     // 视频号入口：所有已匹配站点都显示，方便与另外两个站点统一使用。
     const wxButton = document.createElement('button');
     wxButton.id = WX_BUTTON_ID;
@@ -4299,6 +4373,12 @@
   // 合集识别，必须换键作废。
   const PAGES_CACHE_PREFIX = 'video-pages-v2:';
   let episodeCopyCancelled = false;
+
+  // 逐条/逐页请求的礼貌间隔：固定节拍（恒定 150ms）在风控侧像机器人流量，
+  // 加随机抖动更接近人工翻页；base+spread 毫秒（如 250+250 → 250–500ms）。
+  // 字幕跨集、评论主翻页、楼中楼翻页与线程间统一走这里（见各调用点）。
+  const jitterDelay = (base, spread) => new Promise(resolve =>
+    window.setTimeout(resolve, base + Math.floor(Math.random() * spread)));
 
   // ===== 跨集字幕列表必须走 WBI 签名的 /x/player/wbi/v2 =====
   // 实测（BV1ADpxz9E9V，登录态）：未签名 /x/player/v2 对多数分P返回的 AI 字幕
@@ -4830,9 +4910,9 @@
       }
       done += 1;
       ui.progress(done, pages.length, null);
-      // 集与集之间稍作停顿，避免对字幕接口形成连发。
+      // 集与集之间稍作停顿（随机抖动，避免固定节拍的连发特征）。
       if (pages.indexOf(pageInfo) < pages.length - 1) {
-        await new Promise(resolve => window.setTimeout(resolve, 150));
+        await jitterDelay(200, 150);
       }
     }
     if (episodeCopyCancelled) return null;
@@ -4960,16 +5040,494 @@
     slot.appendChild(button);
   }
 
+  // ===== 评论复制（v2.9.0，设置里默认关闭）=====
+  // 接口实测（2026-11，访客可用、无需 WBI 签名，api.bilibili.com 已在 @connect）：
+  // - 一级评论 /x/v2/reply?pn&ps&type=1&oid={aid}&sort=2 —— sort=2 按热度（访客可用）；
+  //   sort=0 按时间（访客返回空 replies，需登录）。置顶评论在 data.upper.top，
+  //   不在 replies 列表里，单独输出在最前并标（置顶）。
+  // - 楼中楼 /x/v2/reply/reply?type=1&oid&root={rpid}&pn&ps；一级评论自带前 3 条
+  //   子回复（replies 字段），rcount 不超过内嵌数时直接用，超出才翻页补全。
+  // - 评论内容可变、单击即可重取，与字幕行缓存拒绝持久化同理由，这里不做任何缓存。
+  const COMMENT_PAGE_SIZE = 20;
+  // 单条评论楼中楼的最大翻页数（防呆：实测有 rcount=5830 的深线程）
+  const SUB_REPLY_MAX_PAGES = 50;
+  let commentCopyCancelled = false;
+
+  function commentRequestError(result) {
+    if (result && result.code === -352) return new Error('评论接口触发风控，请登录 B 站后重试');
+    return new Error((result && result.message) || '无法读取评论');
+  }
+
+  async function fetchCommentPage(aid, { sort, pn }) {
+    const query = new URLSearchParams({
+      type: '1', oid: String(aid), pn: String(pn), ps: String(COMMENT_PAGE_SIZE), sort: String(sort),
+    });
+    const result = await requestJson(`https://api.bilibili.com/x/v2/reply?${query}`);
+    if (result.code !== 0) throw commentRequestError(result);
+    const data = result.data || {};
+    return {
+      replies: Array.isArray(data.replies) ? data.replies : [],
+      total: Number(data.page?.count) || 0,
+      pinned: data.upper?.top || null,
+    };
+  }
+
+  async function fetchSubReplies(aid, rootRpid) {
+    const collected = [];
+    let pn = 1;
+    // 单线程深翻页防呆：实测存在 rcount=5830 的置顶楼中楼（约 292 页），
+    // 逐线程翻到底在“全部+含楼中楼”下会把复制拖到几分钟。封顶 50 页
+    // （1000 条），超出部分保留内嵌预览并在 toast 说明。
+    for (;;) {
+      if (commentCopyCancelled || pn > SUB_REPLY_MAX_PAGES) return collected;
+      const query = new URLSearchParams({
+        type: '1', oid: String(aid), root: String(rootRpid), pn: String(pn), ps: String(COMMENT_PAGE_SIZE),
+      });
+      const result = await requestJson(`https://api.bilibili.com/x/v2/reply/reply?${query}`);
+      if (result.code !== 0) throw commentRequestError(result);
+      const replies = Array.isArray(result.data?.replies) ? result.data.replies : [];
+      collected.push(...replies);
+      const count = Number(result.data?.page?.count) || collected.length;
+      if (!replies.length || collected.length >= count) return collected;
+      pn += 1;
+      await jitterDelay(200, 200);
+    }
+  }
+
+  // 楼中楼取全：内嵌的 3 条不够时才翻页；翻页失败退回内嵌（不阻塞整批复制）。
+  async function collectSubReplies(aid, reply) {
+    const inline = Array.isArray(reply.replies) ? reply.replies : [];
+    const rcount = Number(reply.rcount) || 0;
+    if (!rcount || rcount <= inline.length) return inline;
+    try {
+      const full = await fetchSubReplies(aid, reply.rpid);
+      // 达到单线程页数封顶：只取到一部分，附注说明而非静默截断。
+      if (full.length >= SUB_REPLY_MAX_PAGES * COMMENT_PAGE_SIZE) {
+        return full.concat([{ note: true, content: '（楼中楼过多，仅显示前 1000 条）' }]);
+      }
+      return full;
+    } catch (error) {
+      console.warn('[复制字幕] 楼中楼获取失败，退回内嵌预览', error);
+      return inline;
+    }
+  }
+
+  // 单条评论 → 一行文本：昵称（标记）：正文；正文内换行压成空格保持一行（纯文本粘贴更稳）。
+  function formatCommentLine(reply, ownerMid, extraBadge) {
+    const badges = [];
+    if (extraBadge) badges.push(extraBadge);
+    if (ownerMid && String(reply?.member?.mid || '') === String(ownerMid)) badges.push('UP主');
+    if (reply?.up_action?.like) badges.push('UP主赞过');
+    const badgeText = badges.length ? `（${badges.join('，')}）` : '';
+    const name = String(reply?.member?.uname || '匿名');
+    const message = String(reply?.content?.message || '').replace(/\s*\n+\s*/g, ' ').trim();
+    return `${name}${badgeText}：${message}`;
+  }
+
+  // 一级评论 + 楼中楼 → 一个文本块；楼中楼缩进两空格，块与块之间空行分隔。
+  function formatCommentBlock(reply, subReplies, ownerMid, extraBadge) {
+    const lines = [formatCommentLine(reply, ownerMid, extraBadge)];
+    for (const sub of subReplies || []) {
+      // note 行是截断说明之类的纯文本，不带昵称前缀
+      lines.push(sub?.note ? `  ${sub.content}` : `  ${formatCommentLine(sub, ownerMid)}`);
+    }
+    return lines.join('\n');
+  }
+
+  // 复制入口（评论区按钮/菜单共用）：未开启时引导去设置；面板打开期间不重复进入。
+  // withSubtitle：由「复制评论和字幕」按钮进入时默认勾上「同时复制字幕」。
+  async function openCommentPanelOrGuide({ withSubtitle = false } = {}) {
+    if (!getCommentCopyEnabled()) {
+      showToast('评论复制未开启：请在设置里勾选后使用');
+      openSettingsPanel(false);
+      return;
+    }
+    if (site !== 'bilibili' || !/\/video\//.test(location.pathname)) {
+      showToast('评论复制仅支持 B 站普通视频页');
+      return;
+    }
+    if (document.getElementById(COMMENT_PANEL_HOST_ID)) return;
+    try {
+      const ids = getIdFromPage();
+      if (!ids.aid) {
+        showToast('没有识别到当前视频编号，请刷新页面后重试');
+        return;
+      }
+      const ownerMid = unsafeWindowOrWindow().__INITIAL_STATE__?.videoData?.owner?.mid || 0;
+      const videoTitle = String(unsafeWindowOrWindow().__INITIAL_STATE__?.videoData?.title || '');
+      // 打开时先探一次总数（单请求），失败不阻塞——运行时会再取。
+      let totalHint = '';
+      try {
+        const first = await fetchCommentPage(ids.aid, { sort: 2, pn: 1 });
+        if (first.total) totalHint = `本视频共 ${first.total} 条评论`;
+      } catch (_) { /* 总数仅用于提示，失败静默 */ }
+      const picked = await showCommentPanel({
+        aid: ids.aid, ownerMid, videoTitle, totalHint, withSubtitle,
+      });
+      if (!picked) return;
+      picked.okBtn.disabled = true;
+      picked.okBtn.textContent = '正在获取…';
+      try {
+        // 组合模式先取字幕（无字幕/失败不阻塞评论部分，结果里说明）。
+        let subtitleText = '';
+        if (picked.options.includeSubtitle) {
+          picked.status.textContent = '正在获取字幕…';
+          try {
+            const video = resolveCurrentVideo();
+            const loaded = await loadSubtitleLines(video);
+            subtitleText = loaded ? normalizeSubtitle(loaded.lines) : '';
+          } catch (error) {
+            console.warn('[复制字幕] 组合模式取字幕失败，仅复制评论', error);
+          }
+        }
+        const commentsText = await runCommentCopy(picked.aid, picked.ownerMid,
+          { ...picked.options, silent: picked.options.includeSubtitle }, {
+            progress: text => { picked.status.textContent = text; },
+            note: text => { picked.status.textContent = text; },
+          });
+        if (commentsText == null) return; // 已取消 / 无评论（提示已由执行器给出）
+        if (picked.options.includeSubtitle) {
+          const final = subtitleText
+            ? `【字幕】${videoTitle}\n${subtitleText}\n\n【评论】\n${commentsText}`
+            : `【评论】（当前视频无可用字幕）\n${commentsText}`;
+          await writeClipboard(final);
+          showToast(`已复制评论${subtitleText ? '与字幕' : ''}，共 ${final.length} 个字符`);
+        }
+      } finally {
+        picked.close();
+      }
+    } catch (error) {
+      console.error('[复制字幕]', error);
+      showToast(`复制评论失败：${error.message || error}`);
+    }
+  }
+
+  // 评论区标题旁的入口：挂在 bili-comments → 头部渲染器 → #navbar 里（“评论 N” 标题
+  // 与「最热/最新」同一行）。整条链路都在 B 站自己的 Shadow DOM 内，页面级 CSS 够不着，
+  // 全部内联样式；头部组件重渲染/切排序会把按钮冲掉，由 1.5s 巡检重建（同跨集入口）。
+  function mountCommentButtons() {
+    const allowed = site === 'bilibili' && /\/video\//.test(location.pathname) && getCommentCopyEnabled();
+    const navbar = allowed
+      ? (document.querySelector('bili-comments')?.shadowRoot
+        ?.querySelector('bili-comments-header-renderer')?.shadowRoot?.querySelector('#navbar'))
+      : null;
+    const existing = navbar?.querySelector(`#${COMMENT_ENTRY_ID}`) || null;
+    if (!allowed || !navbar) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      // 巡检同步「显示/隐藏页面按钮」（Shadow DOM 内 document.getElementById 够不着，
+      // 走这里统一刷新 display）。注意恢复值必须是 flex：置空会清掉挂载时
+      // cssText 里的 display:flex，容器退回 block 导致两按钮竖排堆叠。
+      existing.style.display = isHidden() ? 'none' : 'flex';
+      return;
+    }
+    const entry = document.createElement('div');
+    entry.id = COMMENT_ENTRY_ID;
+    entry.style.cssText = 'display:flex;align-items:center;gap:8px;margin-left:16px;flex:none;';
+    const mkBtn = (text, title, onClick) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = text;
+      btn.title = title;
+      // 对齐 B 站评论区自己的 bili-text-button：无边框文字按钮，灰字悬停变主题色。
+      btn.style.cssText = 'border:none;background:none;padding:0;cursor:pointer;'
+        + 'font-size:13px;line-height:24px;color:#9499A0;font-family:inherit;flex:none;';
+      btn.addEventListener('mouseenter', () => { btn.style.color = '#00aeec'; });
+      btn.addEventListener('mouseleave', () => { btn.style.color = '#9499A0'; });
+      btn.addEventListener('click', onClick);
+      return btn;
+    };
+    // 两按钮之间的竖线分隔，同 B 站「最热|最新」的 sort-div 观感（1px 线、不出头）。
+    const divider = document.createElement('div');
+    divider.style.cssText = 'width:0;border-left:1px solid #e3e5e7;height:12px;margin:0 4px;flex:none;';
+    entry.appendChild(mkBtn('复制评论区',
+      '抓取本视频评论（可含楼中楼）复制为纯文本；入口可在设置里关闭',
+      () => { openCommentPanelOrGuide({ withSubtitle: false }); }));
+    entry.appendChild(divider);
+    entry.appendChild(mkBtn('复制评论和字幕',
+      '字幕与评论一起复制：输出为【字幕】…【评论】… 两段；无字幕时仅评论',
+      () => { openCommentPanelOrGuide({ withSubtitle: true }); }));
+    entry.style.display = isHidden() ? 'none' : 'flex';
+    navbar.appendChild(entry);
+  }
+
+  // 评论选项面板：Shadow DOM 骨架沿用跨集面板（Esc/遮罩关闭即中止，运行中保持打开）。
+  // withSubtitle：由「复制评论和字幕」按钮进入时，「同时复制字幕」默认勾上。
+  function showCommentPanel(options) {
+    return new Promise(resolve => {
+      const { aid, ownerMid, videoTitle, totalHint, withSubtitle } = options;
+      const host = document.createElement('div');
+      host.id = COMMENT_PANEL_HOST_ID;
+      host.style.cssText = 'position:fixed;inset:0;z-index:2147483646';
+      const root = host.attachShadow({ mode: 'open' });
+      const style = document.createElement('style');
+      style.textContent = `
+        .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;color:#222}
+        .panel{background:#fff;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.35);width:min(430px,92vw);max-height:80vh;display:flex;flex-direction:column}
+        .title{font-size:16px;font-weight:600;padding:14px 16px 4px}
+        .subtitle{font-size:12px;color:#888;padding:0 16px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .hint{font-size:12px;color:#888;padding:0 16px 8px}
+        .row{display:flex;align-items:center;gap:8px;padding:6px 16px;font-size:13px}
+        .row label{display:flex;align-items:center;gap:6px;cursor:pointer}
+        .row select{border:1px solid #d9d9d9;border-radius:6px;padding:3px 8px;font-size:12px;color:#222;background:#fff}
+        .note{font-size:12px;color:#999;padding:2px 16px 10px}
+        .actions{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid #eee}
+        .actions .status{flex:1;font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .actions button{border:1px solid #d9d9d9;background:#fff;border-radius:6px;padding:6px 16px;cursor:pointer;font-size:13px;color:#222}
+        .actions button.ok{background:#00aeec;border-color:#00aeec;color:#fff}
+        .actions button:disabled{opacity:.6;cursor:default}
+      `;
+      root.appendChild(style);
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = '复制视频评论';
+      const subtitleLine = document.createElement('div');
+      subtitleLine.className = 'subtitle';
+      subtitleLine.textContent = videoTitle || '';
+      subtitleLine.title = videoTitle || '';
+      const hint = document.createElement('div');
+      hint.className = 'hint';
+      hint.textContent = totalHint || '按热度或时间抓取评论，可含楼中楼，输出为纯文本（昵称：内容）。';
+
+      const sortRow = document.createElement('div');
+      sortRow.className = 'row';
+      const sortLabel = document.createElement('label');
+      const sortSelect = document.createElement('select');
+      [['2', '按热度'], ['0', '按时间（需登录）']].forEach(([value, text]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        sortSelect.appendChild(option);
+      });
+      sortSelect.value = '2';
+      const sortText = document.createElement('span');
+      sortText.textContent = '排序：';
+      sortLabel.appendChild(sortText);
+      sortLabel.appendChild(sortSelect);
+      const limitLabel = document.createElement('label');
+      const limitSelect = document.createElement('select');
+      [['100', '前 100 条'], ['300', '前 300 条'], ['1000', '前 1000 条'], ['0', '全部']].forEach(([value, text]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        limitSelect.appendChild(option);
+      });
+      limitSelect.value = '100';
+      const limitText = document.createElement('span');
+      limitText.textContent = '上限：';
+      limitLabel.appendChild(limitText);
+      limitLabel.appendChild(limitSelect);
+      sortRow.appendChild(sortLabel);
+      sortRow.appendChild(limitLabel);
+
+      const subRow = document.createElement('div');
+      subRow.className = 'row';
+      const subLabel = document.createElement('label');
+      const subBox = document.createElement('input');
+      subBox.type = 'checkbox';
+      subBox.checked = true;
+      const subText = document.createElement('span');
+      subText.textContent = '包含楼中楼（子回复，缩进显示）';
+      subLabel.appendChild(subBox);
+      subLabel.appendChild(subText);
+      const subtitleLabel = document.createElement('label');
+      const subtitleBox = document.createElement('input');
+      subtitleBox.type = 'checkbox';
+      subtitleBox.checked = !!withSubtitle;
+      subtitleBox.title = '无字幕时仅复制评论并在结果中说明；不走语音识别';
+      const subtitleTextEl = document.createElement('span');
+      subtitleTextEl.textContent = '同时复制字幕';
+      subtitleLabel.appendChild(subtitleBox);
+      subtitleLabel.appendChild(subtitleTextEl);
+      subRow.appendChild(subLabel);
+      subRow.appendChild(subtitleLabel);
+
+      const note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = '评论实时抓取不做缓存；页与页之间稍作停顿，量大时请耐心等待。';
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const status = document.createElement('span');
+      status.className = 'status';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = '取消';
+      const okBtn = document.createElement('button');
+      okBtn.type = 'button';
+      okBtn.textContent = '开始复制';
+      okBtn.className = 'ok';
+      actions.appendChild(status);
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+
+      let settled = false;
+      const close = () => {
+        commentCopyCancelled = true;
+        window.removeEventListener('keydown', onKey);
+        host.remove();
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      };
+      const onKey = e => { if (e.key === 'Escape') close(); };
+      cancelBtn.addEventListener('click', close);
+      overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+      window.addEventListener('keydown', onKey);
+      okBtn.addEventListener('click', () => {
+        settled = true;
+        // 不摘 keydown：运行中 Esc 走 close() 即中止（与跨集面板一致）；
+        // settled 已置位，close 的 resolve(null) 无效、只置取消标志。
+        resolve({
+          aid, ownerMid,
+          options: {
+            sort: sortSelect.value,
+            limit: Number(limitSelect.value) || 0,
+            includeSubs: subBox.checked,
+            includeSubtitle: subtitleBox.checked,
+          },
+          status, okBtn, close,
+        });
+      });
+
+      panel.appendChild(title);
+      panel.appendChild(subtitleLine);
+      panel.appendChild(hint);
+      panel.appendChild(sortRow);
+      panel.appendChild(subRow);
+      panel.appendChild(note);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      root.appendChild(overlay);
+      document.body.appendChild(host);
+    });
+  }
+
+  // 评论复制执行器：翻页抓取一级评论（+置顶在最前/+楼中楼），拼纯文本写剪贴板。
+  // options.silent：组合模式（同时复制字幕）下由调用方拼最终文本并写剪贴板，
+  // 执行器只返回评论文本、不写剪贴板、不发成功 toast（取消无提示，空结果的提示仍会发）。
+  // 口径：置顶评论独立计数，不占“前 N 条”的额度；总报数 = 普通 + 置顶。
+  async function runCommentCopy(aid, ownerMid, options, ui) {
+    commentCopyCancelled = false;
+    const blocks = [];
+    let copiedReplies = 0;   // 普通一级评论数（占上限额度）
+    let copiedPinned = 0;    // 置顶数（不占额度）
+    let copiedSubs = 0;
+    let total = 0;
+    const failedPages = [];  // 按页容错：记录失败的页码，保留已抓结果
+    const limit = options.limit > 0 ? options.limit : Infinity;
+    const emitBlock = async (reply, badge) => {
+      const subs = options.includeSubs ? await collectSubReplies(aid, reply) : [];
+      blocks.push(formatCommentBlock(reply, subs, ownerMid, badge));
+      copiedSubs += subs.length;
+    };
+    let pn = 1;
+    for (;;) {
+      if (commentCopyCancelled) return null;
+      let page;
+      try {
+        page = await fetchCommentPage(aid, { sort: options.sort, pn });
+      } catch (error) {
+        // 单页失败（风控/网络断）不丢弃已抓结果：记页码继续尝试后续页，
+        // 连续失败的极端情况由最终 toast 说明（与跨集复制的逐集容错同模式）。
+        console.warn('[复制字幕] 评论页获取失败', `第 ${pn} 页`, error);
+        failedPages.push(pn);
+        if (pn === 1) {
+          showToast(`复制评论失败：${error.message || error}`);
+          return null;
+        }
+        pn += 1;
+        await jitterDelay(250, 250);
+        continue;
+      }
+      if (pn === 1) {
+        total = page.total;
+        if (!total && !page.replies.length && !page.pinned) {
+          showToast(options.sort === '0'
+            ? '按时间排序在未登录时拿不到评论：请登录 B 站或改用按热度'
+            : '当前视频没有可复制的评论（评论区可能已关闭）');
+          return null;
+        }
+        // 置顶评论单独输出在最前、不占上限额度；热度排名落在可见窗口内时
+        // 它同时出现在 replies 里，用 pinnedRpid 去重，避免输出两遍。
+        if (page.pinned) {
+          const pinnedRpid = String(page.pinned.rpid || '');
+          ui.note('正在获取置顶评论…');
+          await emitBlock(page.pinned, '置顶');
+          copiedPinned += 1;
+          page = { ...page, replies: (page.replies || []).filter(r => !pinnedRpid || String(r.rpid) !== pinnedRpid) };
+        }
+      }
+      if (!page.replies.length) break;
+      for (const reply of page.replies) {
+        if (commentCopyCancelled) return null;
+        if (copiedReplies >= limit) break;
+        ui.progress(`已获取 ${copiedReplies + copiedPinned}${limit === Infinity && total ? `/${total}` : ''} 条评论`);
+        // 该评论的楼中楼超出内嵌预览时才会真正发请求；两条评论的楼中楼
+        // 线程之间也要停一拍，否则热门页会形成 20+ 连发（原先这里是 0 间隔）。
+        const subFetchNeeded = options.includeSubs
+          && (Number(reply.rcount) || 0) > (Array.isArray(reply.replies) ? reply.replies.length : 0);
+        await emitBlock(reply);
+        copiedReplies += 1;
+        if (subFetchNeeded) await jitterDelay(150, 150);
+      }
+      if (copiedReplies >= limit) break;
+      // total 兜底：普通评论数达到 page.count 必退（count 含不含置顶都不影响
+      // 正确性——含置顶时 copiedReplies 最多到 total-1，不含时恰好等于 total）。
+      // 防止服务端持续返满页（或 count 失准）时无限翻页。
+      if (total && copiedReplies >= total) break;
+      // 短页且总数明显大于单页容量（total > ps）说明被服务端截断（实测访客态
+      // 每页只放行前 3 条），明示出来，避免"已复制 3 条"被误以为复制了全部。
+      if (page.replies.length < COMMENT_PAGE_SIZE) {
+        if (pn === 1 && total > COMMENT_PAGE_SIZE && copiedReplies + copiedPinned < total) {
+          showToast(`服务端只返回了 ${copiedReplies + copiedPinned} 条评论（共 ${total} 条）：未登录时评论翻页受限，登录 B 站后可获取更多`);
+        }
+        break;
+      }
+      pn += 1;
+      await jitterDelay(250, 250);
+    }
+    if (commentCopyCancelled) return null;
+    if (!blocks.length) {
+      showToast('没有获取到评论');
+      return null;
+    }
+    const combined = blocks.join('\n\n');
+    if (options.silent) return combined;
+    await writeClipboard(combined);
+    const copied = copiedReplies + copiedPinned;
+    const truncated = limit !== Infinity && copied < total && (copiedReplies >= limit || total > COMMENT_PAGE_SIZE);
+    const countText = copiedPinned
+      ? `${copiedReplies} 条评论 + ${copiedPinned} 条置顶`
+      : `${copied} 条评论`;
+    showToast(`已复制 ${countText}${options.includeSubs ? `（含 ${copiedSubs} 条楼中楼）` : ''}`
+      + `${truncated ? `，共 ${total} 条未全部获取（未登录时翻页受限）` : ''}`
+      + `${failedPages.length ? `，失败页：${failedPages.join('、')}` : ''}，共 ${combined.length} 个字符`);
+    return combined;
+  }
+
   {
     GM_registerMenuCommand('跨集复制字幕（选集）', openCrossEpisodeCopy);
     mountEpisodeButton();
+    // 评论复制入口在 B 站评论区组件的 Shadow DOM 里，组件重渲染会把按钮冲掉，
+    // 且 lazy-load 导致头部晚出现——与跨集入口共用一套 1.5s 巡检重建。
+    mountCommentButtons();
     window.setInterval(() => {
       try { mountEpisodeButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
+      try { mountCommentButtons(); } catch (_) { /* 同上 */ }
     }, 1500);
   }
 
   {
     GM_registerMenuCommand('复制当前视频全部字幕', copyAllSubtitles);
+    GM_registerMenuCommand('复制评论区（需在设置开启）', openCommentPanelOrGuide);
     GM_registerMenuCommand('视频号转文字', openWxchannelsPanel);
     GM_registerMenuCommand('上传音视频转文字', openUploadPanel);
     GM_registerMenuCommand('设置（Key / 端点 / 调试 / 缓存）', () => openSettingsPanel());
@@ -4980,6 +5538,8 @@
       if (button) button.dataset.hidden = String(hidden);
       const controls = document.getElementById(CONTROLS_ID);
       if (controls) controls.dataset.hidden = String(hidden);
+      const findListBtn = document.getElementById(FIND_LIST_BUTTON_ID);
+      if (findListBtn) findListBtn.dataset.hidden = String(hidden);
       const clearBtn = document.getElementById(CLEAR_CACHE_BUTTON_ID);
       if (clearBtn) clearBtn.dataset.hidden = String(hidden);
     });
@@ -5021,6 +5581,7 @@
   if (site === 'bilibili'
       && /\/video\/|\/list\/|\/bangumi\/play\/|\/medialist\/play\//.test(location.pathname)) {
     GM_registerMenuCommand('字幕检索（Ctrl+F）', openSubtitleFind);
+    GM_registerMenuCommand('字幕列表（全部字幕）', () => openSubtitleFind());
 
     const onSubtitleFindHotkey = e => {
       if (!(e.ctrlKey || e.metaKey)) return;

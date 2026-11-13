@@ -145,7 +145,7 @@ function check(name, ok, detail) {
   const clip = { text: null };
   const runCrossEpisodeCopy = new Function(
     'episodeCopyCancelled', 'fetchEpisodeSubtitleMeta', 'chooseSubtitle', 'normalizeSubtitle',
-    'loadSubtitleLines', 'transcribeEpisodeViaAsr', 'writeClipboard', 'showToast', 'document', 'window', 'console',
+    'loadSubtitleLines', 'transcribeEpisodeViaAsr', 'writeClipboard', 'showToast', 'document', 'window', 'console', 'jitterDelay',
     extractFunction('runCrossEpisodeCopy') + '\nreturn runCrossEpisodeCopy;');
   const makeRun = () => runCrossEpisodeCopy(
     false,
@@ -162,6 +162,7 @@ function check(name, ok, detail) {
     { cookie: 'DedeUserID=1' },
     { setTimeout: fn => Promise.resolve().then(fn) },
     { warn: () => {} },
+    () => Promise.resolve(), // jitterDelay 桩：测试不真等
   );
   const pages = info.pages; // P1 积分计算 / P2 积分应用 / P3 线代上 / P4 线代下 / P5 概率论(无字幕)
   const combined = await makeRun()(CURRENT.bvid, CURRENT.aid, pages, 'auto', { progress: () => {}, note: () => {} });

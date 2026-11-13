@@ -1,9 +1,10 @@
 // 字幕检索（Ctrl+F）功能的单测
 // 运行：node subtitle-find.test.js
 const fs = require('fs');
+const path = require('path');
 
 const SCRIPT = process.env.BCS_SCRIPT
-  || '/Users/jinzihan/.zcode/workspace/draft-cd30c590-2277-4c95-9cc1-48e10c14d4e3/bilibili-copy-subtitles/bilibili-copy-subtitles.user.js';
+  || path.join(__dirname, 'bilibili-copy-subtitles.user.js');
 const src = fs.readFileSync(SCRIPT, 'utf8');
 
 // 从声明开头取（保留 async 前缀），并跳过参数列表里可能出现的 {} 默认值
@@ -25,6 +26,27 @@ function extract(name) {
 const buildSubtitleMatches = eval('(' + extract('buildSubtitleMatches') + ')');
 
 let pass = 0, fail = 0;
+
+// 花括号配平提取 function 声明（先跳过参数列表，避免解构参数干扰）
+function extractFunction(name) {
+  const markers = [`async function ${name}(`, `function ${name}(`];
+  let at = -1;
+  for (const marker of markers) {
+    at = src.indexOf(marker);
+    if (at >= 0) break;
+  }
+  if (at < 0) throw new Error('未找到函数: ' + name);
+  const sigEnd = src.indexOf(')', at);
+  const bodyStart = src.indexOf('{', sigEnd);
+  let depth = 0, end = -1;
+  for (let j = bodyStart; j < src.length; j++) {
+    if (src[j] === '{') depth++;
+    else if (src[j] === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
+  }
+  if (end < 0) throw new Error('函数体未闭合: ' + name);
+  return src.slice(at, end);
+}
+
 function t(name, got, want) {
   const ok = JSON.stringify(got) === JSON.stringify(want);
   console.log((ok ? '  \u2705 ' : '  \u274c ') + name
@@ -92,6 +114,20 @@ t('fetchSubtitleBodyFresh 返回的 body 可直接喂给 buildSubtitleMatches', 
   const body = [{ from: 12.5, to: 16.0, content: '测试句子' }];
   return buildSubtitleMatches(body, '测试')[0].from;
 })(), 12.5);
+
+// buildPseudoSubtitleLines：ASR 纯文本 → 伪时间行（v2.9.0 检索面板回填已识别结果用）
+console.log('\n--- buildPseudoSubtitleLines（ASR 回填分句） ---');
+const buildPseudoSubtitleLines = new Function(extractFunction('buildPseudoSubtitleLines') + '\nreturn buildPseudoSubtitleLines;')();
+t('按句末标点与换行切句', buildPseudoSubtitleLines('第一句。第二句！第三句？\n第四句', 100).map(x => x.content).join('|'),
+  '第一句。|第二句！|第三句？|第四句');
+t('伪时间均摊到每句', buildPseudoSubtitleLines('a。b。c。', 90).map(x => Math.round(x.from)).join(','),
+  '0,30,60');
+t('空文本/纯空白返回空数组', buildPseudoSubtitleLines('   \n  ', 100).length, 0);
+t('时长缺失按 1 秒兜底不抛错', buildPseudoSubtitleLines('x。', 0).length, 1);
+t('每句 to 与下一句 from 衔接', (() => {
+  const rows = buildPseudoSubtitleLines('a。b。', 60);
+  return Math.abs(rows[0].to - rows[1].from) < 1e-9;
+})(), true);
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);
