@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.9.0
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时仅评论并说明），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。
+// @version      2.9.1
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时仅评论并说明），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.1 设置面板重排：卡片式分区（StepFun 识别/视频号 Cookie/功能开关/字幕缓存）、页头 Key 状态徽章与关闭按钮、输入框焦点态、保存与取消提为底部固定操作条。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -536,33 +536,119 @@
       align-items: center;
       justify-content: center;
       background: rgba(0, 0, 0, .45);
+      backdrop-filter: blur(2px);
     }
     #${KEY_PANEL_ID} .panel {
-      width: 360px;
+      width: 400px;
       max-width: calc(100vw - 40px);
       max-height: calc(100vh - 40px);
       overflow: auto;
-      padding: 18px;
-      border-radius: 10px;
-      background: #fff;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, .25);
+      padding: 0;
+      border-radius: 12px;
+      background: #f7f8fa;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, .22), 0 0 0 1px rgba(0, 0, 0, .04);
       display: flex;
       flex-direction: column;
-      gap: 10px;
       font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #18191c;
     }
-    #${KEY_PANEL_ID} .panel-title { font-size: 15px; font-weight: 600; }
-    #${KEY_PANEL_ID} .panel-status { color: #61666d; font-size: 12px; word-break: break-all; }
-    #${KEY_PANEL_ID} .key-input {
+    #${KEY_PANEL_ID} .panel::-webkit-scrollbar { width: 6px; }
+    #${KEY_PANEL_ID} .panel::-webkit-scrollbar-thumb { background: #d0d3d8; border-radius: 3px; }
+    #${KEY_PANEL_ID} .panel-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px 12px;
+      background: #fff;
+      border-bottom: 1px solid #eceef1;
+      border-radius: 12px 12px 0 0;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    #${KEY_PANEL_ID} .panel-title { font-size: 16px; font-weight: 700; letter-spacing: .5px; flex: 1; }
+    #${KEY_PANEL_ID} .panel-title::before {
+      content: '';
+      display: inline-block;
+      width: 4px;
+      height: 14px;
+      border-radius: 2px;
+      background: #00aeec;
+      margin-right: 8px;
+      vertical-align: -2px;
+    }
+    /* Key 状态徽章：绿点=已配置，灰点=未配置 */
+    #${KEY_PANEL_ID} .panel-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: #f1f2f4;
+      color: #61666d;
+      font-size: 11px;
+      word-break: break-all;
+    }
+    #${KEY_PANEL_ID} .panel-status:not(:empty)::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #c9ccd0;
+      flex: none;
+    }
+    #${KEY_PANEL_ID} .panel-status.ok::before { background: #23c343; }
+    /* 分区卡片 */
+    #${KEY_PANEL_ID} .section {
+      margin: 12px 14px 0;
+      padding: 12px 12px 13px;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .05);
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+    #${KEY_PANEL_ID} .section:last-of-type { margin-bottom: 14px; }
+    #${KEY_PANEL_ID} .panel-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #383940;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #${KEY_PANEL_ID} .panel-label::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #eff1f3;
+    }
+    #${KEY_PANEL_ID} .key-input,
+    #${KEY_PANEL_ID} .text-input,
+    #${KEY_PANEL_ID} .cookie-input,
+    #${KEY_PANEL_ID} .ttl-select {
       width: 100%;
       box-sizing: border-box;
       padding: 8px 10px;
-      border: 1px solid rgba(0, 0, 0, .15);
-      border-radius: 6px;
-      font: 13px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
-      /* 视觉遮罩：用 text 输入 + CSS 打点，避免被浏览器密码管理器识别为密码框。 */
-      -webkit-text-security: disc;
+      border: 1px solid #dcdfe4;
+      border-radius: 8px;
+      background: #fafbfc;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      color: #18191c;
+      transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    #${KEY_PANEL_ID} .ttl-select { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    #${KEY_PANEL_ID} .key-input { font-size: 13px; /* 视觉遮罩：text+打点，避免触发密码管理器 */ -webkit-text-security: disc; }
+    #${KEY_PANEL_ID} .cookie-input { min-height: 64px; resize: vertical; word-break: break-all; font-size: 11px; }
+    #${KEY_PANEL_ID} .key-input:hover, #${KEY_PANEL_ID} .text-input:hover,
+    #${KEY_PANEL_ID} .cookie-input:hover, #${KEY_PANEL_ID} .ttl-select:hover { border-color: #c4c8ce; }
+    #${KEY_PANEL_ID} .key-input:focus, #${KEY_PANEL_ID} .text-input:focus,
+    #${KEY_PANEL_ID} .cookie-input:focus, #${KEY_PANEL_ID} .ttl-select:focus {
+      outline: none;
+      border-color: #00aeec;
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(0, 174, 236, .14);
     }
     #${KEY_PANEL_ID} .panel-test {
       min-height: 16px;
@@ -571,70 +657,85 @@
       word-break: break-all;
     }
     #${KEY_PANEL_ID} .panel-row { display: flex; gap: 8px; }
+    #${KEY_PANEL_ID} .panel-row.grid2 { display: grid; grid-template-columns: 1fr 1fr; }
+    #${KEY_PANEL_ID} .panel-row button { white-space: nowrap; }
     #${KEY_PANEL_ID} .panel-row button {
       flex: 1;
       padding: 7px 0;
       border: 0;
-      border-radius: 6px;
+      border-radius: 8px;
       color: #fff;
       background: #00aeec;
       cursor: pointer;
       font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      transition: background .15s ease, transform .1s ease;
     }
     #${KEY_PANEL_ID} .panel-row button:hover { background: #009bd3; }
-    #${KEY_PANEL_ID} .panel-row button.ghost { background: #e3e5e7; color: #18191c; }
-    #${KEY_PANEL_ID} .panel-row button.ghost:hover { background: #d7d9dc; }
-    #${KEY_PANEL_ID} .panel-row button:disabled { cursor: wait; opacity: .6; }
-    #${KEY_PANEL_ID} .panel-hint { color: #9499a0; font-size: 12px; }
-    #${KEY_PANEL_ID} .panel-label { font-size: 12px; font-weight: 600; color: #61666d; }
-    #${KEY_PANEL_ID} .text-input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 7px 9px;
-      border: 1px solid rgba(0, 0, 0, .15);
-      border-radius: 6px;
-      font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+    #${KEY_PANEL_ID} .panel-row button:active { transform: translateY(1px); }
+    #${KEY_PANEL_ID} .panel-row button.ghost {
+      background: #fff;
+      color: #383940;
+      box-shadow: inset 0 0 0 1px #dcdfe4;
     }
-    #${KEY_PANEL_ID} .cookie-input {
-      width: 100%;
-      box-sizing: border-box;
-      min-height: 64px;
-      padding: 7px 9px;
-      border: 1px solid rgba(0, 0, 0, .15);
-      border-radius: 6px;
-      font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
-      resize: vertical;
-      word-break: break-all;
-    }
+    #${KEY_PANEL_ID} .panel-row button.ghost:hover { background: #f2f6f8; box-shadow: inset 0 0 0 1px #00aeec; color: #00aeec; }
+    #${KEY_PANEL_ID} .panel-row button:disabled { cursor: wait; opacity: .55; }
+    #${KEY_PANEL_ID} .panel-hint { color: #9499a0; font-size: 11.5px; line-height: 1.6; }
     #${KEY_PANEL_ID} .check-line {
       display: flex;
-      align-items: center;
-      gap: 7px;
+      align-items: flex-start;
+      gap: 8px;
       font-size: 12px;
       color: #61666d;
       cursor: pointer;
+      line-height: 1.55;
     }
-    #${KEY_PANEL_ID} .check-line input { margin: 0; cursor: pointer; }
-    #${KEY_PANEL_ID} .ttl-select {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 7px 8px;
-      border: 1px solid rgba(0, 0, 0, .15);
-      border-radius: 6px;
-      background: #fff;
-      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: #18191c;
+    #${KEY_PANEL_ID} .check-line input { margin: 2px 0 0; cursor: pointer; accent-color: #00aeec; width: 14px; height: 14px; flex: none; }
+    #${KEY_PANEL_ID} .check-line:hover span { color: #18191c; }
+    #${KEY_PANEL_ID} .cache-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #61666d;
     }
-    #${KEY_PANEL_ID} .cache-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #61666d; }
     #${KEY_PANEL_ID} .cache-line button {
-      padding: 4px 10px;
+      margin-left: auto;
+      padding: 4px 12px;
       border: 0;
-      border-radius: 4px;
-      color: #fff;
-      background: #f56c6c;
+      border-radius: 6px;
+      color: #f53f3f;
+      background: #fdecec;
       cursor: pointer;
       font-size: 12px;
+      transition: background .15s ease;
     }
+    #${KEY_PANEL_ID} .cache-line button:hover { background: #fbdbdb; }
+    /* 底部固定操作条：保存是全局动作，提到面板级 */
+    #${KEY_PANEL_ID} .panel-actions {
+      position: sticky;
+      bottom: 0;
+      display: flex;
+      gap: 10px;
+      padding: 12px 14px;
+      background: #fff;
+      border-top: 1px solid #eceef1;
+      border-radius: 0 0 12px 12px;
+      margin-top: auto;
+    }
+    #${KEY_PANEL_ID} .panel-actions button {
+      flex: 1;
+      padding: 9px 0;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      transition: background .15s ease, transform .1s ease;
+    }
+    #${KEY_PANEL_ID} .panel-actions button:active { transform: translateY(1px); }
+    #${KEY_PANEL_ID} .panel-actions .primary { background: #00aeec; color: #fff; }
+    #${KEY_PANEL_ID} .panel-actions .primary:hover { background: #009bd3; }
+    #${KEY_PANEL_ID} .panel-actions .plain { background: #fff; color: #61666d; box-shadow: inset 0 0 0 1px #dcdfe4; }
+    #${KEY_PANEL_ID} .panel-actions .plain:hover { color: #18191c; box-shadow: inset 0 0 0 1px #c4c8ce; }
     #${PROGRESS_PANEL_ID} {
       position: fixed;
       z-index: 100004;
@@ -2077,14 +2178,18 @@
     const status = document.createElement('div');
     status.className = 'panel-status';
     const current = getAsrApiKey();
-    status.textContent = current
-      ? `当前已设置：${current.slice(0, 4)}****${current.slice(-4)}`
-      : '当前未设置 Key';
+    const syncKeyStatus = value => {
+      status.textContent = value
+        ? `已配置 ${value.slice(0, 4)}****${value.slice(-4)}`
+        : '未配置 Key';
+      status.classList.toggle('ok', !!value);
+    };
+    syncKeyStatus(current);
 
     // ---- 分区：StepFun 语音识别 ----
     const keyLabel = document.createElement('div');
     keyLabel.className = 'panel-label';
-    keyLabel.textContent = 'StepFun API Key';
+    keyLabel.textContent = 'StepFun 语音识别';
     const input = document.createElement('input');
     input.className = 'key-input';
     // 用 text + CSS 遮罩代替 password 类型，避免触发浏览器“保存密码”提示。
@@ -2129,10 +2234,9 @@
     const cancelButton = document.createElement('button');
     cancelButton.textContent = '取消';
     cancelButton.className = 'ghost';
-    row.appendChild(saveButton);
-    row.appendChild(clearButton);
+    // 保存/取消提为面板级操作（见组装段），分区内只留 Key 相关动作。
     row.appendChild(testButton);
-    row.appendChild(cancelButton);
+    row.appendChild(clearButton);
     const hint = document.createElement('div');
     hint.className = 'panel-hint';
     hint.textContent = 'Key 与各配置仅保存在浏览器本地，不会上传到其他服务器。';
@@ -2147,7 +2251,8 @@
     cookieInput.value = getYuanbaoCookie();
     cookieInput.spellcheck = false;
     const wxRow = document.createElement('div');
-    wxRow.className = 'panel-row';
+    // 4 个按钮两行两列，避免 flex 均分下「一键读取 Cookie」文字换行。
+    wxRow.className = 'panel-row grid2';
     const openYuanbaoButton = document.createElement('button');
     openYuanbaoButton.textContent = '打开元宝';
     openYuanbaoButton.className = 'ghost';
@@ -2202,7 +2307,7 @@
     // ---- 分区：字幕缓存 ----
     const ttlLabel = document.createElement('div');
     ttlLabel.className = 'panel-label';
-    ttlLabel.textContent = '字幕缓存留存时间';
+    ttlLabel.textContent = '字幕缓存';
     const ttlSelect = document.createElement('select');
     ttlSelect.className = 'ttl-select';
     CACHE_TTL_OPTIONS.forEach(option => {
@@ -2232,29 +2337,44 @@
     cacheLine.appendChild(cacheInfo);
     cacheLine.appendChild(clearCacheButton);
 
-    panel.appendChild(title);
-    panel.appendChild(status);
-    panel.appendChild(keyLabel);
-    panel.appendChild(input);
-    panel.appendChild(endpointLabel);
-    panel.appendChild(endpointInput);
-    panel.appendChild(langLabel);
-    panel.appendChild(langSelect);
-    panel.appendChild(testResult);
-    panel.appendChild(row);
-    panel.appendChild(hint);
-    panel.appendChild(wxLabel);
-    panel.appendChild(cookieInput);
-    panel.appendChild(wxRow);
-    panel.appendChild(cookieTestResult);
-    panel.appendChild(wxHint);
-    panel.appendChild(debugLabel);
-    panel.appendChild(debugLine);
-    panel.appendChild(commentLabel);
-    panel.appendChild(commentLine);
-    panel.appendChild(ttlLabel);
-    panel.appendChild(ttlSelect);
-    panel.appendChild(cacheLine);
+    // 组装：页头（标题 + Key 状态徽章 + ✕）→ 分区卡片 → 底部固定操作条。
+    // 「保存/取消」是全局动作，提为面板级；StepFun 分区内保留清除/测试。
+    const mkSection = (...children) => {
+      const section = document.createElement('div');
+      section.className = 'section';
+      children.forEach(child => section.appendChild(child));
+      return section;
+    };
+    const head = document.createElement('div');
+    head.className = 'panel-head';
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.textContent = '✕';
+    closeButton.title = '关闭';
+    closeButton.style.cssText = 'border:none;background:none;font-size:15px;color:#9499a0;cursor:pointer;padding:2px 4px;flex:none;line-height:1;';
+    closeButton.addEventListener('mouseenter', () => { closeButton.style.color = '#18191c'; });
+    closeButton.addEventListener('mouseleave', () => { closeButton.style.color = '#9499a0'; });
+    closeButton.addEventListener('click', closeSettingsPanel);
+    head.appendChild(title);
+    head.appendChild(status);
+    head.appendChild(closeButton);
+
+    const actions = document.createElement('div');
+    actions.className = 'panel-actions';
+    cancelButton.className = 'plain';
+    saveButton.className = 'primary';
+    actions.appendChild(cancelButton);
+    actions.appendChild(saveButton);
+
+    panel.appendChild(head);
+    panel.appendChild(mkSection(keyLabel, input, endpointLabel, endpointInput, langLabel, langSelect, testResult, row, hint));
+    panel.appendChild(mkSection(wxLabel, cookieInput, wxRow, cookieTestResult, wxHint));
+    const togglesLabel = document.createElement('div');
+    togglesLabel.className = 'panel-label';
+    togglesLabel.textContent = '功能开关';
+    panel.appendChild(mkSection(togglesLabel, debugLine, commentLine));
+    panel.appendChild(mkSection(ttlLabel, ttlSelect, cacheLine));
+    panel.appendChild(actions);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
     input.focus();
@@ -2266,8 +2386,7 @@
       GM_setValue(ASR_LANGUAGE_SETTING, langSelect.value);
       GM_setValue(YUANBAO_COOKIE_SETTING, cookieInput.value.trim());
       GM_setValue(CACHE_TTL_SETTING, Number(ttlSelect.value));
-      const value = getAsrApiKey();
-      status.textContent = value ? `当前已设置：${value.slice(0, 4)}****${value.slice(-4)}` : '当前未设置 Key';
+      syncKeyStatus(getAsrApiKey());
       refreshCacheLine();
       showToast('设置已保存');
       // 保存后关闭：首次配置 Key 的场景可直接返回继续复制。
@@ -2277,7 +2396,7 @@
       setAsrApiKey('');
       input.value = '';
       testResult.textContent = '';
-      status.textContent = '当前未设置 Key';
+      syncKeyStatus('');
       showToast('已清除 StepFun API Key，无字幕视频将不再自动识别');
     });
     testButton.addEventListener('click', async () => {
