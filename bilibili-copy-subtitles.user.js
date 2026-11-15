@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.9.5
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.5 卡顿根修（三路子智能体审计）：字幕拼接 O(n²) 二次方修复（cons-string+正则 $ 锚每轮 flatten，实测 3.2 万行 3.9s→9.5ms，约 400 倍，输出逐字节等价——长课程视频点复制时主线程被烧穿的主因）；合集切集后 bvid/cid 错配修复（原先 100% 触发 10 秒空等，“多次回退后按按钮卡死”的主因），播放器 URL 等待从 10 秒缩到 3 秒；GM 持久层加 120 条帽+空闲写入去掉 5 秒强制超时+清除缓存分批 idle 删除（同步 GM 桥随历史累积阻塞交互帧的主因）；识别全文的会话缓存 24→8 条（防撑爆配额后缓存静默失效）；评论区巡检同值不写样式；修正 WBI 签名 md5 字节序（10 组向量全错→全对，B 站服务端宽容未暴露）、WBI key 内存缓存类型错误、配额恢复幽灵键；移除检索词跨面板保留。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
+// @version      2.9.6
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.6 三路静态复审后 P1/P2 全量落地：检索面板 ↑↓ 改增量更新且修当前项>200 条丢失（focusIndex 起批+ensureRendered）；GM 持久层帽补全 pages/chapters 前缀并整体下沉 idle（写缓存同步段不再枚举 GM 全键）；体积判断改真实字节（中文 UTF-16 length 低估约 3 倍）；ASR 断点加 256KB 帽+启动过期清扫；整文件退化路径分片改惰性物化（6.9h 视频峰值 0.8-1.2GB 减半）+ 超大文件前置提示；上传转文字重采样搬进 OfflineAudioContext（主线程 90 分钟约 7s 冻结归零）+去 500MB 白拷+Float32→Int16 分块让出；Ctrl+F 离开视频页放行原生查找；两个章节面板分支均加等待提示；BODY/会话帽两段合并为 enforceSessionCap（配额恢复删到帽-1）；清除缓存 idle 加 2s 兜底+文案如实；内存命中补 TTL 检查；base64 按 3 倍数分块（消 16MB 中间串）；进度面板 timer 挂面板元素（双 ASR 流互不干扰）+自清；mountButton observer 挂载即断开；听悟按钮离开转写页摘除；设置面板关闭动画窗口重开闪没修复；播放器 URL 捕获加 bilibili.com 预筛；巡检按 site 门控；章节归桶双指针化；评论区入口改单例重附+委托点击+style 注入 hover（重渲染零分配）。v2.9.5 卡顿根修（三路子智能体审计）：字幕拼接 O(n²) 二次方修复（cons-string+正则 $ 锚每轮 flatten，实测 3.2 万行 3.9s→9.5ms，约 400 倍，输出逐字节等价——长课程视频点复制时主线程被烧穿的主因）；合集切集后 bvid/cid 错配修复（原先 100% 触发 10 秒空等，“多次回退后按按钮卡死”的主因），播放器 URL 等待从 10 秒缩到 3 秒；GM 持久层加 120 条帽+空闲写入去掉 5 秒强制超时+清除缓存分批 idle 删除（同步 GM 桥随历史累积阻塞交互帧的主因）；识别全文的会话缓存 24→8 条（防撑爆配额后缓存静默失效）；评论区巡检同值不写样式；修正 WBI 签名 md5 字节序（10 组向量全错→全对，B 站服务端宽容未暴露）、WBI key 内存缓存类型错误、配额恢复幽灵键；移除检索词跨面板保留。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -145,6 +145,7 @@
 
   // ===== Fork v2：章节选择 / 流式分段下载 / 断点续传 / 独立工作标签页 =====
   const CHAPTER_CACHE_PREFIX = 'video-chapters-v1:';
+  const PAGES_CACHE_PREFIX = 'video-pages-v2:';
   const CHECKPOINT_PREFIX = 'asr-checkpoint-v2:';
   const CHECKPOINT_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
   const AUDIO_WINDOW_BYTES = 8 * 1024 * 1024;    // 流式下载滑动窗口（本页执行取小值控制峰值内存）
@@ -252,6 +253,9 @@
   }
 
   function rememberPlayerApiUrl(value) {
+    // 预筛：hostname 必含 bilibili.com，其余站点（YouTube 每秒多次分片请求）的
+    // 资源在字符串比较处挡掉，免付每次 2 次 new URL 的解析成本。
+    if (typeof value === 'string' && value.indexOf('bilibili.com') < 0) return;
     try {
       const url = new URL(value, location.href);
       if (url.hostname !== 'api.bilibili.com' || url.pathname !== '/x/player/wbi/v2') return;
@@ -267,6 +271,7 @@
 
   // 播放器自身发出的音频地址请求，与字幕请求分开存放，避免互相干扰。
   function rememberPlayerPlayApiUrl(value) {
+    if (typeof value === 'string' && value.indexOf('bilibili.com') < 0) return;
     try {
       const url = new URL(value, location.href);
       if (url.hostname !== 'api.bilibili.com') return;
@@ -760,7 +765,17 @@
   function readCache(prefix, key) {
     const fullKey = `${prefix}${key}`;
     const memory = memoryCache.get(fullKey);
-    if (memory) { touchMemoryCache(fullKey); return memory.value; }
+    if (memory) {
+      // 内存命中也查 TTL：短 TTL 设置下同一会话内不再返回已过期值
+      //（原先只有 GM 层做过期检查，内存层放行）。
+      const ttl = getCacheTtlMs();
+      if (ttl > 0 && Date.now() - Date.parse(memory.cachedAt) > ttl) {
+        memoryCache.delete(fullKey);
+        return null;
+      }
+      touchMemoryCache(fullKey);
+      return memory.value;
+    }
     try {
       const raw = sessionStorage.getItem(fullKey);
       if (raw) {
@@ -803,7 +818,36 @@
   // 而重跑要真金白银计费，所以保留持久化。
   const SESSION_ONLY_PREFIXES = [SUBTITLE_LINES_PREFIX];
   // 其余前缀的体积兜底：超出也不落盘，避免异常大的值把主线程堵死。
+  // sessionStorage 同前缀条目帽：BODY（识别全文，单条数百 KB）收紧到 8 条，
+  // 其余前缀 24 条；按 cachedAt 删最旧并同步清内存层。字幕行（LINES）有独立的
+  // 8 条 + __order__ 索引机制（pruneSubtitleLinesCache），跳过以免双轨淘汰留死索引。
+  function enforceSessionCap(prefix, fullKey) {
+    if (prefix === SUBTITLE_LINES_PREFIX) return;
+    const cap = prefix === BODY_CACHE_PREFIX ? 8 : 24;
+    const siblings = [];
+    for (let i = 0; i < sessionStorage.length; i += 1) {
+      const k = sessionStorage.key(i);
+      if (k && k.startsWith(prefix) && k !== fullKey) siblings.push(k);
+    }
+    if (siblings.length < cap) return;
+    const stamped = siblings.map(k => {
+      let at = 0;
+      try { at = Date.parse(JSON.parse(sessionStorage.getItem(k) || '{}').cachedAt) || 0; } catch (_) {}
+      return { k, at };
+    }).sort((a, b) => a.at - b.at);
+    for (let i = 0; i < stamped.length - (cap - 1); i += 1) {
+      sessionStorage.removeItem(stamped[i].k);
+      memoryCache.delete(stamped[i].k);
+    }
+  }
+
   const GM_PERSIST_MAX_BYTES = 128 * 1024;
+  const GM_PERSIST_MAX_ENTRIES = 120; // GM 持久层条目帽（meta/body/pages/chapters 合计）
+  let gmCapScheduled = false;         // idle 调度去重：连续写缓存只排一次
+  // 真实字节数（UTF-8）：Blob.size 在所有目标浏览器可用；失败兜底 length×2。
+  const serializedSizeBytes = str => {
+    try { return new Blob([str]).size; } catch (_) { return str.length * 2; }
+  };
 
   function writeCache(prefix, key, value) {
     const fullKey = `${prefix}${key}`;
@@ -815,85 +859,51 @@
       serialized = JSON.stringify(entry);
       sessionStorage.setItem(fullKey, serialized);
     } catch (error) {
-      // 配额满时先淘汰最早的字幕行缓存再重试一次，否则缓存会一直写不进去。
+      // 配额满：按本前缀条目帽先删到 cap-1 再重试（原先是两段不一致的相似代码，
+      // 配额恢复只删 1 条常常不够、重试再败即整条缓存静默丢失）。
       if (error && error.name === 'QuotaExceededError') {
-        // 配额恢复：优先按本前缀的条目帽淘汰（fullKey 已含前缀，原实现把
-        // prefix+key 拼给 LINES 专用函数，产出不存在的幽灵键，淘汰为空）。
-        try {
-          if (prefix !== SUBTITLE_LINES_PREFIX) {
-            const cap = prefix === BODY_CACHE_PREFIX ? 8 : 24;
-            const siblings = [];
-            for (let i = 0; i < sessionStorage.length; i += 1) {
-              const k = sessionStorage.key(i);
-              if (k && k.startsWith(prefix) && k !== fullKey) siblings.push(k);
-            }
-            if (siblings.length >= cap) sessionStorage.removeItem(siblings[0]);
-          }
-        } catch (_) { /* 忽略 */ }
+        try { enforceSessionCap(prefix, fullKey); } catch (_) { /* 忽略 */ }
         try { sessionStorage.setItem(fullKey, serialized); } catch (_) { return; }
       } else {
         return; // storage may be disabled
       }
     }
-    // sessionStorage 条目上限（字幕行的 8 条机制之外）：META/BODY 每视频各一条，
-    // 长会话持续累积会逼近 ~5MB 配额——配额临界时每次写都是大 JSON 同步 stringify
-    // + QuotaExceeded 重试，正是滚动/播放交互时的卡顿源。超限按写入时间删最旧。
-    try {
-      const siblings = [];
-      for (let i = 0; i < sessionStorage.length; i += 1) {
-        const k = sessionStorage.key(i);
-        if (k && k.startsWith(prefix) && k !== fullKey) siblings.push(k);
-      }
-      // BODY 前缀单独收紧：单条可达数百 KB（识别全文），24 条会逼近/撑爆
-      // sessionStorage ~5MB 配额（写失败后缓存静默失效）。其余前缀单条小，24 条足够。
-      const cap = prefix === BODY_CACHE_PREFIX ? 8 : 24;
-      if (siblings.length >= cap) {
-        const stamped = siblings.map(k => {
-          let at = 0;
-          try { at = Date.parse((JSON.parse(sessionStorage.getItem(k) || '{}').cachedAt)) || 0; } catch (_) {}
-          return { k, at };
-        }).sort((a, b) => a.at - b.at);
-        for (let i = 0; i < stamped.length - (cap - 1); i += 1) {
-          sessionStorage.removeItem(stamped[i].k);
-          memoryCache.delete(stamped[i].k);
-        }
-      }
-    } catch (_) { /* 存储异常不影响主流程 */ }
+    // 常规写入后的条目帽维持：写满 cap 条时淘汰到 cap-1，未满时零成本。
+    try { enforceSessionCap(prefix, fullKey); } catch (_) { /* 存储异常不影响主流程 */ }
     if (getCacheTtlMs() === 0) return;
     if (SESSION_ONLY_PREFIXES.indexOf(prefix) >= 0) return;              // 仅会话级前缀
-    if (serialized.length > GM_PERSIST_MAX_BYTES) return;   // 体积兜底
-    // GM 持久层条目帽：TTL 非 0 时条目随看过的视频单调增长，同步桥读写的成本
-    // 随之上升（“越用越卡”在 GM 侧的最后一个累积口）。写入前按 cachedAt 淘汰
-    // 最旧的，封顶 120 条；删除延后到空闲帧，不占交互路径。
-    try {
-      if (typeof GM_listValues === 'function' && typeof GM_deleteValue === 'function') {
-        const keys = GM_listValues().filter(k => CACHE_PREFIXES.some(pref => k.startsWith(pref)));
-        if (keys.length >= 120) {
-          const evict = () => {
+    // 体积兜底：量真实字节而非 UTF-16 length——中文内容 1 字符 = 3 字节，
+    // 原判断对中文识别全文放行约 3 倍体积（43K 中文字符“过关”、实际 ~130KB 落盘，
+    // 单次同步 GM 写可回到数百毫秒级）。
+    if (serializedSizeBytes(serialized) > GM_PERSIST_MAX_BYTES) return;
+    // GM 持久层条目帽 + 持久化写入：合并为一次 idle 调度。GM_listValues 全键
+    // 枚举随历史线性增长且是同步桥——绝不能留在点击的同步段（v2.9.5 的帽检查
+    // 就犯了这个错），全部下沉到 idle；gmCapScheduled 去重，连续写缓存只排一次。
+    const run = () => {
+      gmCapScheduled = false;
+      try { GM_setValue(fullKey, serialized); } catch (_) { /* 忽略存储异常 */ }
+      try {
+        if (typeof GM_listValues === 'function' && typeof GM_deleteValue === 'function') {
+          const keys = GM_listValues().filter(k => CACHE_PREFIXES.some(pref => k.startsWith(pref)));
+          // 帽=120：覆盖 meta/lines/body/pages/chapters 全部走 GM 的前缀
+          //（v2.9.5 只盖了 meta/body，pages/chapters 每看一视频 +1 无上限）。
+          if (keys.length >= GM_PERSIST_MAX_ENTRIES) {
             const stamped = keys.map(k => {
               let at = 0;
               try { at = Date.parse(JSON.parse(GM_getValue(k, '{}').cachedAt)) || 0; } catch (_) {}
               return { k, at };
             }).sort((a, b) => a.at - b.at);
-            for (let i = 0; i < stamped.length - 119; i += 1) {
+            for (let i = 0; i < stamped.length - (GM_PERSIST_MAX_ENTRIES - 1); i += 1) {
               try { GM_deleteValue(stamped[i].k); } catch (_) { /* ignore */ }
             }
-          };
-          if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(evict);
-          else window.setTimeout(evict, 0);
+          }
         }
-      }
-    } catch (_) { /* GM 不可用时跳过 */ }
-    // 持久层写入延后到空闲帧，避免占点击/按键的关键路径。
-    // 能走到这里的值已不超过 GM_PERSIST_MAX_BYTES，阻塞可忽略。
-    const persist = () => { try { GM_setValue(fullKey, serialized); } catch (_) { /* 忽略存储异常 */ } };
-    // 不带 timeout：页面繁忙时 idle 回调不会在 5 秒后被强制执行——强制执行会把
-    // 同步 GM 桥接落在交互帧上（v2.7.4 实测 703ms）。宁可晚写，不抢关键路径。
-    if (typeof window.requestIdleCallback === 'function') {
-      window.requestIdleCallback(persist);
-    } else {
-      window.setTimeout(persist, 0);
-    }
+      } catch (_) { /* GM 不可用时跳过 */ }
+    };
+    if (gmCapScheduled) return; // 已有待执行的调度，本条写入由那次顺带完成
+    gmCapScheduled = true;
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run);
+    else window.setTimeout(run, 0);
   }
 
   // v2.7.4 起字幕行缓存改为仅会话级（不写 GM 持久层）——GM 的 chrome.storage 写入是
@@ -922,7 +932,9 @@
   }
 
   // 字幕相关缓存前缀：meta（字幕列表）+ lines（原始字幕行）+ body（识别结果/视频号转写）。
-  const CACHE_PREFIXES = [META_CACHE_PREFIX, SUBTITLE_LINES_PREFIX, BODY_CACHE_PREFIX];
+  // pages/chapters 同样落 GM 持久层且每视频 +1，必须与 meta/body 共享帽与清理，
+  // 否则“越用越卡”只堵一半、“清除全部缓存”名不副实。
+  const CACHE_PREFIXES = [META_CACHE_PREFIX, SUBTITLE_LINES_PREFIX, BODY_CACHE_PREFIX, PAGES_CACHE_PREFIX, CHAPTER_CACHE_PREFIX];
   const isCacheKey = key => CACHE_PREFIXES.some(prefix => key.startsWith(prefix));
 
   function listCacheKeys() {
@@ -954,7 +966,10 @@
         try { GM_deleteValue(gmKeys[index]); } catch (_) { /* 忽略存储异常 */ }
       }
       if (index < gmKeys.length) {
-        if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(drain);
+        // timeout 兜底：持续繁忙页面上无限期 idle 意味着 GM 层迟迟不删，而
+        // toast 已宣布清完——readCache 会穿透命中旧值。2s 强制执行一批 15 次
+        // 小删除（毫秒级），远好于永不执行。
+        if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(drain, { timeout: 2000 });
         else window.setTimeout(drain, 0);
       }
     };
@@ -1172,7 +1187,39 @@
     } catch (_) { return null; }
   }
   function writeCheckpoint(key, value) {
-    try { GM_setValue(key, JSON.stringify({ value, cachedAt: new Date().toISOString() })); } catch (_) { /* ignore */ }
+    // 体积帽（真实字节）：断点是分片识别文本，异常大的值不落盘（重跑该片即可），
+    // 避免同步 GM 桥被大写阻塞；正常分片几十 KB，256KB 帽只挡异常。
+    let serialized;
+    try { serialized = JSON.stringify({ value, cachedAt: new Date().toISOString() }); } catch (_) { return; }
+    if (serializedSizeBytes(serialized) > 256 * 1024) return;
+    try { GM_setValue(key, serialized); } catch (_) { /* ignore */ }
+  }
+
+  // 启动清扫过期断点：弃跑的断点原先要躺满 7 天 TTL 且一直撑大 GM_listValues
+  //（每次写缓存 idle 都要枚举一遍）。idle 分批删，15 键/帧。
+  function sweepExpiredCheckpoints() {
+    if (typeof GM_listValues !== 'function' || typeof GM_deleteValue !== 'function') return;
+    const run = () => {
+      try {
+        const stale = GM_listValues()
+          .filter(k => k.startsWith(CHECKPOINT_PREFIX))
+          .filter(k => {
+            try { return Date.now() - Date.parse(JSON.parse(GM_getValue(k, '{}')).cachedAt) > CHECKPOINT_MAX_AGE_MS; }
+            catch (_) { return true; } // 坏值一并清掉
+          });
+        let index = 0;
+        const drain = () => {
+          const until = Math.min(index + 15, stale.length);
+          for (; index < until; index += 1) {
+            try { GM_deleteValue(stale[index]); } catch (_) { /* ignore */ }
+          }
+          if (index < stale.length) window.requestIdleCallback(drain, { timeout: 2000 });
+        };
+        if (stale.length) drain();
+      } catch (_) { /* ignore */ }
+    };
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 5000 });
+    else window.setTimeout(run, 0);
   }
   function clearCheckpointsFor(videoKey, selHash) {
     if (typeof GM_listValues !== 'function') return;
@@ -1670,12 +1717,13 @@
     let loadFailed = null;
     let asrBusy = false;
 
-    const escapeHtml = s => String(s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    // 单遍字符类 + 映射表转义：原先 4 条链式 replace（每行 12 次正则，
+    // 命中视图 200 行/次按键 = 2400 次正则）降为每行 3 次单遍扫描。
+    const ESCAPE_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+    const escapeHtml = s => String(s).replace(/[&<>"]/g, ch => ESCAPE_MAP[ch]);
 
-    // 把一行文本按命中位置切片，当前命中包 <mark>，其余命中包 <i> 轻标记
-    const renderLine = (m, isCur) => {
+    // 把一行文本按命中位置切片，命中包 <mark> 高亮。
+    const renderLine = m => {
       const before = escapeHtml(m.content.slice(0, m.matchStart));
       const hit = escapeHtml(m.content.slice(m.matchStart, m.matchStart + m.matchLength));
       const after = escapeHtml(m.content.slice(m.matchStart + m.matchLength));
@@ -1696,26 +1744,31 @@
     // 大面积布局重绘，在 B 站这种重页面上就是肉眼可见的卡顿。改成按批渲染 +
     // 滚动续载，首屏成本与列表总长脱钩。
     const ROW_BATCH = 200;
-    const renderWindowed = (buildRow, total) => {
+    // focusIndex：首屏以它为中心起批（回绕到第 N 条命中时当前项仍可见——原先
+    // 恒从 0 起批，cur ≥ 200 时当前项既不在首批也不被渲染，高亮行直接消失）。
+    // 返回 ensureRendered(upto)：把渲染推进到指定下标，供 go() 增量更新使用。
+    const renderWindowed = (buildRow, total, focusIndex = 0) => {
       list.onscroll = null;
       list.replaceChildren();
-      if (!total) return;
+      if (!total) return () => {};
       let rendered = 0;
-      const appendBatch = () => {
-        const end = Math.min(total, rendered + ROW_BATCH);
-        if (end === rendered) return;
+      const appendTo = end => {
+        end = Math.min(total, end);
+        if (end <= rendered) return;
         const frag = document.createDocumentFragment();
         for (let i = rendered; i < end; i++) frag.appendChild(buildRow(i));
         list.appendChild(frag);
         rendered = end;
       };
-      appendBatch();
+      appendTo(Math.max(ROW_BATCH, Math.min(total, focusIndex + (ROW_BATCH >> 1) + 1)));
+      const ensureRendered = upto => appendTo(upto + 1);
       if (rendered < total) {
         list.onscroll = () => {
           if (rendered >= total) { list.onscroll = null; return; }
-          if (list.scrollTop + list.clientHeight >= list.scrollHeight - 240) appendBatch();
+          if (list.scrollTop + list.clientHeight >= list.scrollHeight - 240) appendTo(rendered + ROW_BATCH);
         };
       }
+      return ensureRendered;
     };
 
     // 全量字幕列表：不输入关键字也能逐条点击跳转。
@@ -1789,8 +1842,8 @@
       count.append(b, document.createTextNode(` / ${matches.length} 命中`));
 
       // 与全量字幕共用同一套窗口化渲染：高频词可能命中上千条，
-      // 一次建满会卡；当前项恒为 0，一定落在首批里。
-      renderWindowed(i => {
+      // 一次建满会卡；首屏以当前项为中心起批。
+      ensureHitsRendered = renderWindowed(i => {
         const m = matches[i];
         const row = document.createElement('div');
         row.className = 'row' + (i === cur ? ' cur' : '');
@@ -1799,15 +1852,17 @@
         t.textContent = fmtClock(m.from * 1000);
         const txt = document.createElement('span');
         txt.className = 'txt';
-        txt.innerHTML = renderLine(m, i === cur);
+        txt.innerHTML = renderLine(m);
         row.append(t, txt);
         row.addEventListener('click', () => { go(i, true); });
         return row;
-      }, matches.length);
+      }, matches.length, cur);
       prevBtn.disabled = nextBtn.disabled = matches.length < 2;
-      const curRow = list.children[cur];
+      const curRow = list.children[Math.min(Math.max(cur, 0), list.children.length - 1)];
       if (curRow) curRow.scrollIntoView({ block: 'nearest' });
     };
+
+    let ensureHitsRendered = null; // 命中视图的续渲染器（render 命中分支时更新）
 
     const runSearch = () => {
       matches = buildSubtitleMatches(lines || [], input.value);
@@ -1815,10 +1870,33 @@
       render();
     };
 
+    // ↑↓/Enter 的唯一入口：增量更新而非全量重建——只切 .cur、重写受影响两行
+    // （mark 高亮随 cur 移动），补渲染到新 cur 后滚动定位。渲染器失配时退回全量。
     const go = (i, seek) => {
       if (!matches.length) return;
+      const prev = cur;
       cur = (i + matches.length) % matches.length;
-      render();
+      if (prev === cur) return;
+      if (!ensureHitsRendered || !input.value.trim()) {
+        render();
+      } else {
+        ensureHitsRendered(cur);
+        const rows = list.children;
+        if (rows[prev]) {
+          rows[prev].classList.remove('cur');
+          const txt = rows[prev].querySelector('.txt');
+          if (txt) txt.innerHTML = renderLine(matches[prev]);
+        }
+        const row = rows[cur];
+        if (row) {
+          row.classList.add('cur');
+          const txt = row.querySelector('.txt');
+          if (txt) txt.innerHTML = renderLine(matches[cur]);
+          row.scrollIntoView({ block: 'nearest' });
+        } else {
+          render(); // 兜底：渲染器与状态失配（如全量视图占了列表）
+        }
+      }
       if (seek) seekPlayer(matches[cur].from);
     };
 
@@ -2046,10 +2124,11 @@
   // Esc / ✕ / 点遮罩均可关闭；打开/关闭有缩放淡入淡出动画；跟随系统暗色。
   function openSettingsPanel(focusKey = true) {
     const existingHost = document.getElementById(KEY_PANEL_ID);
-    if (existingHost) {
+    if (existingHost && existingHost.dataset.closing !== '1') {
       if (focusKey) existingHost.shadowRoot?.querySelector('.key-input')?.focus();
       return;
     }
+    if (existingHost) existingHost.remove(); // 关闭动画未走完的重开：立即移除重建
     const host = document.createElement('div');
     host.id = KEY_PANEL_ID;
     const root = host.attachShadow({ mode: 'open' });
@@ -2295,7 +2374,7 @@
     clearCacheButton.addEventListener('click', () => {
       clearAllCaches();
       refreshCacheLine();
-      showToast('已清除全部字幕缓存');
+      showToast('已清除会话缓存，持久缓存后台清理中');
     });
     cacheLine.append(cacheInfo, clearCacheButton);
     cachePane.append(
@@ -2440,7 +2519,11 @@
 
   function closeSettingsPanel() {
     const host = document.getElementById(KEY_PANEL_ID);
-    if (!host) return;
+    if (!host || host.dataset.closing === '1') return;
+    // 标记关闭中：120ms 动画窗口内重开时，openSettingsPanel 的守卫不能把
+    // 这个"将死"的 host 当成已打开（否则 focus 完 120ms 后被动画定时器移除，
+    // 面板从眼前消失）。
+    host.dataset.closing = '1';
     if (settingsKeydownHandler) {
       window.removeEventListener('keydown', settingsKeydownHandler);
       settingsKeydownHandler = null;
@@ -2474,13 +2557,23 @@
     panel.appendChild(detail);
     document.body.appendChild(panel);
     progressStartedAt = Date.now();
-    progressTimer = window.setInterval(() => {
-      const current = document.getElementById(PROGRESS_PANEL_ID);
-      const detailEl = current?.querySelector('.detail');
+    // timer 挂在面板元素上而非模块级单例：两条 ASR 流并发时（视频页复制中又开
+    // 视频号面板），单例会被后开的面板顶掉、先开流的 finally 再把后流的 timer
+    // 清了——各管各的。回调自清：面板被外部移除（非 hideProgressPanel 路径）时
+    // 不再永久空转。
+    const timer = window.setInterval(() => {
+      if (!panel.isConnected) {
+        window.clearInterval(timer);
+        if (progressTimer === timer) progressTimer = 0;
+        return;
+      }
+      const detailEl = panel.querySelector('.detail');
       if (!detailEl) return;
       const extra = detailEl.dataset.extra || '';
       detailEl.textContent = `${extra ? `${extra} · ` : ''}已用 ${formatElapsed(Date.now() - progressStartedAt)}`;
     }, 250);
+    panel._timer = timer;
+    progressTimer = timer;
     return panel;
   }
 
@@ -2508,6 +2601,8 @@
   }
 
   function hideProgressPanel() {
+    const panel = document.getElementById(PROGRESS_PANEL_ID);
+    if (panel && panel._timer) window.clearInterval(panel._timer);
     clearInterval(progressTimer);
     progressTimer = 0;
     document.getElementById(PROGRESS_PANEL_ID)?.remove();
@@ -2869,13 +2964,14 @@
       .sort((a, b) => a.startMs - b.startMs);
     if (!items.length || !ordered.length || !picked.length) return '';
     const buckets = new Map(picked.map(ch => [ch.id, []]));
+    // 双指针：items 与 ordered 均按时间升序，owner 下标随 item 单调前进——
+    // 原先每个 item 都从 ordered[0] 线性找 owner，O(行数×章节数)。
+    let ownerIndex = 0;
     for (const item of items) {
-      let owner = ordered[0];
-      for (const ch of ordered) {
-        if (ch.startMs <= item.fromMs) owner = ch;
-        else break;
+      while (ownerIndex + 1 < ordered.length && ordered[ownerIndex + 1].startMs <= item.fromMs) {
+        ownerIndex += 1;
       }
-      const bucket = buckets.get(owner.id);
+      const bucket = buckets.get(ordered[ownerIndex].id);
       if (bucket) bucket.push(item.line);
     }
     const sections = [];
@@ -3055,12 +3151,15 @@
   }
 
   function bytesToBase64(bytes) {
-    const CHUNK_SIZE = 0x8000;
-    let binary = '';
-    for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + CHUNK_SIZE));
+    // 块长取 3 的倍数（32766）：块间 base64 无填充缝，可直接拼接，输出与整块
+    // btoa 逐字节相同。原先整块 16MB 中间串 + btoa 一次 94ms 长任务。
+    const CHUNK = 0x8000 - (0x8000 % 3);
+    const parts = [];
+    for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+      const slice = bytes.subarray(offset, offset + CHUNK);
+      parts.push(btoa(String.fromCharCode.apply(null, slice)));
     }
-    return btoa(binary);
+    return parts.join('');
   }
 
   // DASH 音轨是自包含 fMP4：头部（ftyp+moov+sidx）加若干 moof/mdat 片段。
@@ -3081,7 +3180,10 @@
 
     const firstMoof = boxes.find(box => box.type === 'moof');
     if (!firstMoof) {
-      if (bytes.length <= maxBytes) return [bytes];
+      if (bytes.length <= maxBytes) {
+        // 与分组路径同构的惰性描述符（单片直接复用原数组，零拷贝）。
+        return [{ total: bytes.length, materialize: () => bytes }];
+      }
       throw new Error('音频过大且无法按片段分片');
     }
 
@@ -3101,17 +3203,26 @@
     }
     if (current.length > 0) groups.push(current);
 
+    // 惰性物化：只返回轻量描述符（header 视图 + 分片区间），调用方消费某片时
+    // 才拼出该片的 Uint8Array。原先一次性物化全部分片——整文件退化路径下
+    // bytes（可达数百 MB）与全部分片同时驻留，峰值翻倍（6.9h 视频约 0.8-1.2GB，
+    // heapGuard 前就可能崩标签页）。每片独立拼接，任何时刻只有“当前片”在内存。
     return groups.map(group => {
       let total = header.length;
       for (const fragment of group) total += fragment.size;
-      const chunk = new Uint8Array(total);
-      chunk.set(header, 0);
-      let cursor = header.length;
-      for (const fragment of group) {
-        chunk.set(bytes.subarray(fragment.start, fragment.start + fragment.size), cursor);
-        cursor += fragment.size;
-      }
-      return chunk;
+      return {
+        total,
+        materialize: () => {
+          const chunk = new Uint8Array(total);
+          chunk.set(header, 0);
+          let cursor = header.length;
+          for (const fragment of group) {
+            chunk.set(bytes.subarray(fragment.start, fragment.start + fragment.size), cursor);
+            cursor += fragment.size;
+          }
+          return chunk;
+        },
+      };
     });
   }
 
@@ -3296,15 +3407,20 @@
         stage('正在下载音频', total ? loaded / total : null,
           `${formatMB(loaded)}${total ? ` / ${formatMB(total)}` : ''}`);
       }, () => fetchAudioTrack(video));
+      // 超大文件前置提示：整文件路径下 bytes 本身可达数百 MB，先说清再做，
+      // 不让用户在 heapGuard 抛错/标签页被杀时莫名其妙。
+      if (bytes.length > 300 * 1024 * 1024) {
+        showToast(`音频较大（${formatMB(bytes.length)}），整片路径内存压力大，若失败请刷新后重试`);
+      }
       const chunks = splitAudioChunks(bytes, MAX_AUDIO_CHUNK_BYTES);
       const fallbackHash = 'full-dl';
       const texts = await mapWithBudget((async function* iterateChunks() { for (const c of chunks) yield c; })(),
-        async (chunk, idx) => {
+        async (chunkDesc, idx) => {
           const ck = checkpointKey(videoKey, fallbackHash, 0, idx);
           const cached = readCheckpoint(ck);
           if (cached != null) return cached;
           await heapGuard(`兜底整片 第 ${idx + 1} 片`);
-          const text = await transcribeAudioChunk(chunk, apiKey, hooks.onChunkDelta);
+          const text = await transcribeAudioChunk(chunkDesc.materialize(), apiKey, hooks.onChunkDelta);
           writeCheckpoint(ck, text);
           await sleep0();
           return text;
@@ -3668,51 +3784,55 @@
   }
 
   // 浏览器内置解码器提取音轨并重采样为 16k 单声道 PCM（替代 ffmpeg）。
-  function wxDecodeToPcm16k(bytes) {
-    return new Promise((resolve, reject) => {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (!Ctx) {
-        reject(new Error('当前浏览器不支持 AudioContext，无法提取音频'));
-        return;
-      }
-      const ctx = new Ctx();
-      const slice = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      ctx.decodeAudioData(slice, audio => {
-        try {
-          const targetRate = 16000;
-          const channels = audio.numberOfChannels;
-          const srcRate = audio.sampleRate;
-          const srcLen = audio.length;
-          const ratio = srcRate / targetRate;
-          const outLen = Math.max(1, Math.floor(srcLen / ratio));
-          const pcm = new Int16Array(outLen);
-          const data = [];
-          for (let c = 0; c < channels; c += 1) data.push(audio.getChannelData(c));
-          for (let i = 0; i < outLen; i += 1) {
-            const pos = i * ratio;
-            const i0 = Math.floor(pos);
-            const frac = pos - i0;
-            let sum = 0;
-            for (let c = 0; c < channels; c += 1) {
-              const ch = data[c];
-              const a = ch[i0] || 0;
-              const b = ch[Math.min(i0 + 1, srcLen - 1)] || 0;
-              sum += a + (b - a) * frac;
-            }
-            const v = sum / channels;
-            pcm[i] = Math.max(-32768, Math.min(32767, v * 32767));
-          }
-          ctx.close();
-          resolve({ pcm, duration: audio.duration, sampleRate: targetRate });
-        } catch (error) {
-          ctx.close();
-          reject(error);
-        }
-      }, error => {
-        ctx.close();
-        reject(new Error(`音频解码失败：${error?.message || error}`));
+  async function wxDecodeToPcm16k(bytes) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) throw new Error('当前浏览器不支持 AudioContext，无法提取音频');
+    // 白拷修复：byteOffset 为 0 且长度吻合时直接用原 buffer（上传文件常见，
+    // 500MB 级白拷一次既慢又翻倍峰值）。
+    const slice = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer
+      : bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const decodeCtx = new Ctx();
+    let audio;
+    try {
+      audio = await new Promise((resolve, reject) => {
+        // Promise 形式的 decodeAudioData 在部分老 Safari 缺失，保留回调形。
+        decodeCtx.decodeAudioData(slice, resolve, error => reject(new Error(`音频解码失败：${error?.message || error}`)));
       });
-    });
+    } finally {
+      decodeCtx.close();
+    }
+    const targetRate = 16000;
+    const srcRate = audio.sampleRate;
+    const srcLen = audio.length;
+    const outLen = Math.max(1, Math.floor(srcLen * targetRate / srcRate));
+    let f32;
+    const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (Offline && srcRate !== targetRate) {
+      // 重采样搬进音频线程：原先是主线程逐样本线性插值，实测 30 分钟音频
+      // 2.3s、90 分钟约 7s 的连续冻结（上传转文字场景的主线程卡死源）。
+      // OfflineAudioContext 还自带抗锯齿，对识别是正收益。
+      const off = new Offline(1, outLen, targetRate);
+      const src = off.createBufferSource();
+      src.buffer = audio;
+      src.connect(off.destination);
+      src.start();
+      f32 = (await off.startRendering()).getChannelData(0);
+    } else {
+      f32 = audio.getChannelData(0);
+    }
+    // Float32→Int16 仍是主线程简循环（每样本一次 clamp+乘法，60 分钟 ≈ 5800 万次
+    // 约 100-200ms），按 1<<20 样本分块、块间 setTimeout(0) 让出。
+    const pcm = new Int16Array(outLen);
+    for (let start = 0; start < outLen; start += (1 << 20)) {
+      const end = Math.min(outLen, start + (1 << 20));
+      for (let i = start; i < end; i += 1) {
+        const v = Math.max(-1, Math.min(1, f32[i]));
+        pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+      }
+      if (end < outLen) await new Promise(resolve => window.setTimeout(resolve, 0));
+    }
+    return { pcm, duration: audio.duration, sampleRate: targetRate };
   }
 
   // 小文件整包按 m4a 送；大文件解码提 WAV 后分片送。
@@ -4119,6 +4239,9 @@
         const chapters = await loadVideoChapters(video, videoKey);
         let selection = { mode: 'full' };
         if (Array.isArray(chapters) && chapters.length) {
+          // 与有字幕分支同款提示：全屏遮罩面板会一直等待选择，避免误以为卡死。
+          if (button) button.textContent = '等待选择章节…';
+          showToast('本视频带章节，已弹出选择面板：直接确认即整篇，或勾选章节；Esc 取消');
           const picked = await showChapterPanel(chapters, track);
           if (!picked) return; // 用户取消
           selection = picked;
@@ -4365,7 +4488,11 @@
 
   function mountTingwuButton() {
     if (site !== 'tingwu' || !document.body) return;
-    if (!tingwuTransId()) return; // 只在转写详情页挂按钮
+    // 只在转写详情页挂按钮；SPA 离开转写页时摘除（否则固定定位按钮残留到刷新）
+    if (!tingwuTransId()) {
+      document.getElementById(TINGWU_BUTTON_ID)?.remove();
+      return;
+    }
     if (document.getElementById(TINGWU_BUTTON_ID)) return;
     const button = document.createElement('button');
     button.id = TINGWU_BUTTON_ID;
@@ -4450,7 +4577,7 @@
     clearCacheButton.addEventListener('click', () => {
       if (!window.confirm('确定清除全部字幕与识别结果缓存？\n（已复制/识别过的内容需要重新获取）')) return;
       clearAllCaches();
-      showToast('已清除全部字幕缓存');
+      showToast('已清除会话缓存，持久缓存后台清理中');
     });
     // 齿轮与清缓存并排一行（.tools-row），不再各占一整行。
     const toolsRow = document.createElement('div');
@@ -4475,7 +4602,7 @@
   const EPISODE_PANEL_HOST_ID = 'bili-sub-episode-host';
   // v2：旧 v1 缓存对合集视频只存了“1 个分P”（当时合集分支不存在），会永久挡住
   // 合集识别，必须换键作废。
-  const PAGES_CACHE_PREFIX = 'video-pages-v2:';
+
   let episodeCopyCancelled = false;
 
   // 逐条/逐页请求的礼貌间隔：固定节拍（恒定 150ms）在风控侧像机器人流量，
@@ -4985,7 +5112,7 @@
       const part = pageInfo.part || '';
       return part ? `P${pageInfo.page} ${part.length > 10 ? `${part.slice(0, 10)}…` : part}` : `P${pageInfo.page}`;
     };
-    for (const pageInfo of pages) {
+    for (const [pageIndex, pageInfo] of pages.entries()) {
       if (episodeCopyCancelled) return null;
       ui.progress(done, pages.length, pageInfo);
       // 合集的每集是独立 BV：bvid/aid 取该集自带的（伪分P），多分P沿用当前页的。
@@ -5021,7 +5148,7 @@
       done += 1;
       ui.progress(done, pages.length, null);
       // 集与集之间稍作停顿（随机抖动，避免固定节拍的连发特征）。
-      if (pages.indexOf(pageInfo) < pages.length - 1) {
+      if (pageIndex < pages.length - 1) {
         await jitterDelay(200, 150);
       }
     }
@@ -5331,54 +5458,81 @@
   // 评论区标题旁的入口：挂在 bili-comments → 头部渲染器 → #navbar 里（“评论 N” 标题
   // 与「最热/最新」同一行）。整条链路都在 B 站自己的 Shadow DOM 内，页面级 CSS 够不着，
   // 全部内联样式；头部组件重渲染/切排序会把按钮冲掉，由 1.5s 巡检重建（同跨集入口）。
-  function mountCommentButtons() {
-    const allowed = site === 'bilibili' && /\/video\//.test(location.pathname) && getCommentCopyEnabled();
-    const navbar = allowed
-      ? (document.querySelector('bili-comments')?.shadowRoot
-        ?.querySelector('bili-comments-header-renderer')?.shadowRoot?.querySelector('#navbar'))
-      : null;
-    const existing = navbar?.querySelector(`#${COMMENT_ENTRY_ID}`) || null;
-    if (!allowed || !navbar) {
-      existing?.remove();
-      return;
-    }
-    if (existing) {
-      // 巡检同步「显示/隐藏页面按钮」（Shadow DOM 内 document.getElementById 够不着，
-      // 走这里统一刷新 display）。同值不写：往 B 站活跃布局树写 CSSOM 每次都触发
-      // 样式失效（实测同值 66µs/变更 213µs），与 B 站自身渲染争帧。恢复值必须是
-      // flex：置空会清掉挂载时 cssText 里的 display:flex，两按钮会竖排堆叠。
-      const want = isHidden() ? 'none' : 'flex';
-      if (existing.style.display !== want) existing.style.display = want;
-      return;
-    }
+  // 评论区入口单例：节点与监听器只创建一次，重渲染被 B 站冲掉后“重附同一节点”
+  //（appendChild 已连接节点 = 移动，监听器全保留）。原先每次重建 4 元素 + 6 个
+  // 监听器（最坏 0.67Hz），现在最坏只是零分配的一次 appendChild。
+  let commentEntrySingleton = null;
+
+  function buildCommentEntry() {
     const entry = document.createElement('div');
     entry.id = COMMENT_ENTRY_ID;
     entry.style.cssText = 'display:flex;align-items:center;gap:8px;margin-left:16px;flex:none;';
-    const mkBtn = (text, title, onClick) => {
+    const mkBtn = (text, title, act) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = text;
       btn.title = title;
-      // 对齐 B 站评论区自己的 bili-text-button：无边框文字按钮，灰字悬停变主题色。
+      btn.dataset.act = act;
+      // 对齐 B 站评论区自己的 bili-text-button：无边框文字按钮，灰字悬停变主题色
+      //（hover 由注入的 <style> 承担，不再绑 mouseenter/mouseleave 写 CSSOM）。
       btn.style.cssText = 'border:none;background:none;padding:0;cursor:pointer;'
         + 'font-size:13px;line-height:24px;color:#9499A0;font-family:inherit;flex:none;';
-      btn.addEventListener('mouseenter', () => { btn.style.color = '#00aeec'; });
-      btn.addEventListener('mouseleave', () => { btn.style.color = '#9499A0'; });
-      btn.addEventListener('click', onClick);
       return btn;
     };
     // 两按钮之间的竖线分隔，同 B 站「最热|最新」的 sort-div 观感（1px 线、不出头）。
     const divider = document.createElement('div');
     divider.style.cssText = 'width:0;border-left:1px solid #e3e5e7;height:12px;margin:0 4px;flex:none;';
     entry.appendChild(mkBtn('复制评论区',
-      '抓取本视频评论（可含楼中楼）复制为纯文本；入口可在设置里关闭',
-      () => { openCommentPanelOrGuide({ withSubtitle: false }); }));
+      '抓取本视频评论（可含楼中楼）复制为纯文本；入口可在设置里关闭', 'comments'));
     entry.appendChild(divider);
     entry.appendChild(mkBtn('复制评论和字幕',
-      '字幕与评论一起复制：输出为【字幕】…【评论】… 两段；无字幕时仅评论',
-      () => { openCommentPanelOrGuide({ withSubtitle: true }); }));
-    entry.style.display = isHidden() ? 'none' : 'flex';
-    navbar.appendChild(entry);
+      '字幕与评论一起复制：输出为【字幕】…【评论】… 两段；无字幕时先语音识别',
+      'withSubs'));
+    // 单个委托 click：重建为零后监听器不再累积，行为也不随节点复用而丢失。
+    entry.addEventListener('click', e => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      openCommentPanelOrGuide({ withSubtitle: btn.dataset.act === 'withSubs' });
+    });
+    // hover 样式注入 B 站头部的 shadowRoot（一次），替代每按钮两个 mouse 监听。
+    try {
+      const headerShadow = document.querySelector('bili-comments')?.shadowRoot
+        ?.querySelector('bili-comments-header-renderer')?.shadowRoot;
+      if (headerShadow && !headerShadow.querySelector('style[data-bili-copy]')) {
+        const style = document.createElement('style');
+        style.setAttribute('data-bili-copy', '1');
+        style.textContent = `#${COMMENT_ENTRY_ID} button:hover{color:#00aeec}`;
+        headerShadow.appendChild(style);
+      }
+    } catch (_) { /* shadow 不可用时退化为无 hover 变色 */ }
+    return entry;
+  }
+
+  function mountCommentButtons() {
+    const allowed = site === 'bilibili' && /\/video\//.test(location.pathname) && getCommentCopyEnabled();
+    if (!allowed) {
+      commentEntrySingleton?.remove();
+      return;
+    }
+    const navbar = document.querySelector('bili-comments')?.shadowRoot
+      ?.querySelector('bili-comments-header-renderer')?.shadowRoot?.querySelector('#navbar');
+    if (!navbar) return;
+    const entry = commentEntrySingleton && commentEntrySingleton.isConnected === false
+      ? commentEntrySingleton
+      : (navbar.querySelector(`#${COMMENT_ENTRY_ID}`) || null);
+    if (entry && entry.isConnected && entry.parentElement === navbar) {
+      // 巡检同步「显示/隐藏页面按钮」。同值不写：往 B 站活跃布局树写 CSSOM 每次
+      // 都触发样式失效（实测同值 66µs/变更 213µs）。恢复值必须是 flex：置空会
+      // 清掉 cssText 里的 display:flex，两按钮会竖排堆叠。
+      const want = isHidden() ? 'none' : 'flex';
+      if (entry.style.display !== want) entry.style.display = want;
+      return;
+    }
+    // 首建或被 B 站重渲染冲掉后重附（同节点移动，监听器保留）。
+    if (!commentEntrySingleton) commentEntrySingleton = buildCommentEntry();
+    const want = isHidden() ? 'none' : 'flex';
+    commentEntrySingleton.style.display = want;
+    navbar.appendChild(commentEntrySingleton);
   }
 
   // 评论选项面板：Shadow DOM 骨架沿用跨集面板（Esc/遮罩关闭即中止，运行中保持打开）。
@@ -5649,14 +5803,18 @@
 
   {
     GM_registerMenuCommand('跨集复制字幕（选集）', openCrossEpisodeCopy);
-    mountEpisodeButton();
-    // 评论复制入口在 B 站评论区组件的 Shadow DOM 里，组件重渲染会把按钮冲掉，
-    // 且 lazy-load 导致头部晚出现——与跨集入口共用一套 1.5s 巡检重建。
-    mountCommentButtons();
-    window.setInterval(() => {
-      try { mountEpisodeButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
-      try { mountCommentButtons(); } catch (_) { /* 同上 */ }
-    }, 1500);
+    // 两个入口只在 B 站有意义：site gate 挡掉 YouTube/视频号/元宝页每 1.5s 的
+    // 空转（守卫虽快，但评论开关的 GM 读在 site 短路后才被跳过）。
+    if (site === 'bilibili') {
+      mountEpisodeButton();
+      // 评论复制入口在 B 站评论区组件的 Shadow DOM 里，组件重渲染会把按钮冲掉，
+      // 且 lazy-load 导致头部晚出现——与跨集入口共用一套 1.5s 巡检重建。
+      mountCommentButtons();
+      window.setInterval(() => {
+        try { mountEpisodeButton(); } catch (_) { /* 巡检失败不影响其他功能 */ }
+        try { mountCommentButtons(); } catch (_) { /* 同上 */ }
+      }, 1500);
+    }
   }
 
   {
@@ -5687,7 +5845,14 @@
     });
 
     mountButton();
-    new MutationObserver(mountButton).observe(document.documentElement, {
+    // 控件挂上后断开：documentElement+subtree 的常驻观察在高 churn 页面（元宝
+    // 对话流式渲染、YouTube）是纯录制税；挂载成功后再无摘除路径（隐藏走
+    // dataset），不需要继续观察。
+    const mountObserver = new MutationObserver(() => {
+      mountButton();
+      if (document.getElementById(CONTROLS_ID)) mountObserver.disconnect();
+    });
+    mountObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
     });
@@ -5708,6 +5873,8 @@
 
   // 清理旧版写入的 GM 字幕行缓存（v2.7.4 起不再写 GM，旧条目留着只会拖慢读取）
   migrateStaleGmLinesCache();
+  // 清扫过期 ASR 断点（弃跑的断点原先躺满 7 天并持续撑大 GM 键空间）
+  sweepExpiredCheckpoints();
 
   // ===== 字幕检索（Ctrl/Cmd+F）=====
   // 只在视频类页面接管，避免劫持 B 站首页/空间页等处的原生查找。
@@ -5720,6 +5887,9 @@
     const onSubtitleFindHotkey = e => {
       if (!(e.ctrlKey || e.metaKey)) return;
       if (String(e.key || '').toLowerCase() !== 'f') return;
+      // SPA 离开视频页后放行原生查找：注册条件只在加载时求值一次，
+      // 不复核会把首页/空间页的 Ctrl+F 也吞掉（打开面板后报“读取失败”）。
+      if (!/\/video\/|\/list\/|\/bangumi\/play\/|\/medialist\/play\//.test(location.pathname)) return;
       // 面板已打开时，让输入框内部自行处理（全选等），不重复 preventDefault。
       const inOurInput = e.target instanceof Element
         && e.target.closest?.('#' + FIND_PANEL_HOST_ID) !== null;

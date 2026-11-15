@@ -65,11 +65,16 @@ t('等价性：' + cases.length + ' 组用例逐字节一致', allEq);
 
 // 性能：模拟长视频字幕（中文无标点 AI 字幕是最坏情形）
 function bench(fn, lines, label) {
-  const t0 = process.hrtime.bigint();
-  fn(lines);
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  console.log(`    ${label}: ${ms.toFixed(1)}ms`);
-  return ms;
+  // 取 3 次最小值：并发负载下首次运行可能有抖动（曾出现 5000 行阈值误报）。
+  let best = Infinity;
+  for (let r = 0; r < 3; r++) {
+    const t0 = process.hrtime.bigint();
+    fn(lines);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    if (ms < best) best = ms;
+  }
+  console.log(`    ${label}: ${best.toFixed(1)}ms`);
+  return best;
 }
 for (const n of [5000, 10000, 20000, 32000]) {
   const lines = Array.from({ length: n }, (_, i) => `这是第${i}条没有标点的中文字幕内容`);
