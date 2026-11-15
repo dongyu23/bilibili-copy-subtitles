@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.9.4
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
+// @version      2.9.5
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.5 卡顿根修（三路子智能体审计）：字幕拼接 O(n²) 二次方修复（cons-string+正则 $ 锚每轮 flatten，实测 3.2 万行 3.9s→9.5ms，约 400 倍，输出逐字节等价——长课程视频点复制时主线程被烧穿的主因）；合集切集后 bvid/cid 错配修复（原先 100% 触发 10 秒空等，“多次回退后按按钮卡死”的主因），播放器 URL 等待从 10 秒缩到 3 秒；GM 持久层加 120 条帽+空闲写入去掉 5 秒强制超时+清除缓存分批 idle 删除（同步 GM 桥随历史累积阻塞交互帧的主因）；识别全文的会话缓存 24→8 条（防撑爆配额后缓存静默失效）；评论区巡检同值不写样式；修正 WBI 签名 md5 字节序（10 组向量全错→全对，B 站服务端宽容未暴露）、WBI key 内存缓存类型错误、配额恢复幽灵键；移除检索词跨面板保留。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -72,7 +72,6 @@
   const SUBTITLE_LINES_MAX_ENTRIES = 8;
   const FIND_PANEL_HOST_ID = 'bili-subtitle-find-host';
   // 上次的检索词：关掉面板再按 Ctrl+F 时恢复，与浏览器原生查找栏的体验一致。
-  let subtitleFindLastQuery = '';
   // 内存缓存上限（LRU）：B 站是 SPA，长会话连续看视频不刷新页面，无上限的 Map 会把
   // 每个看过的视频的 meta/body/pages 全部驻留（“越用越卡”的来源之一）。命中/写入
   // 都 touch，超限删最旧；淘汰只是多一次 sessionStorage 读取，无正确性影响。
@@ -818,7 +817,19 @@
     } catch (error) {
       // 配额满时先淘汰最早的字幕行缓存再重试一次，否则缓存会一直写不进去。
       if (error && error.name === 'QuotaExceededError') {
-        try { pruneSubtitleLinesCache(`${SUBTITLE_LINES_PREFIX}${key}`); } catch (_) { /* 忽略 */ }
+        // 配额恢复：优先按本前缀的条目帽淘汰（fullKey 已含前缀，原实现把
+        // prefix+key 拼给 LINES 专用函数，产出不存在的幽灵键，淘汰为空）。
+        try {
+          if (prefix !== SUBTITLE_LINES_PREFIX) {
+            const cap = prefix === BODY_CACHE_PREFIX ? 8 : 24;
+            const siblings = [];
+            for (let i = 0; i < sessionStorage.length; i += 1) {
+              const k = sessionStorage.key(i);
+              if (k && k.startsWith(prefix) && k !== fullKey) siblings.push(k);
+            }
+            if (siblings.length >= cap) sessionStorage.removeItem(siblings[0]);
+          }
+        } catch (_) { /* 忽略 */ }
         try { sessionStorage.setItem(fullKey, serialized); } catch (_) { return; }
       } else {
         return; // storage may be disabled
@@ -833,13 +844,16 @@
         const k = sessionStorage.key(i);
         if (k && k.startsWith(prefix) && k !== fullKey) siblings.push(k);
       }
-      if (siblings.length >= 24) {
+      // BODY 前缀单独收紧：单条可达数百 KB（识别全文），24 条会逼近/撑爆
+      // sessionStorage ~5MB 配额（写失败后缓存静默失效）。其余前缀单条小，24 条足够。
+      const cap = prefix === BODY_CACHE_PREFIX ? 8 : 24;
+      if (siblings.length >= cap) {
         const stamped = siblings.map(k => {
           let at = 0;
           try { at = Date.parse((JSON.parse(sessionStorage.getItem(k) || '{}').cachedAt)) || 0; } catch (_) {}
           return { k, at };
         }).sort((a, b) => a.at - b.at);
-        for (let i = 0; i < stamped.length - 23; i += 1) {
+        for (let i = 0; i < stamped.length - (cap - 1); i += 1) {
           sessionStorage.removeItem(stamped[i].k);
           memoryCache.delete(stamped[i].k);
         }
@@ -848,11 +862,35 @@
     if (getCacheTtlMs() === 0) return;
     if (SESSION_ONLY_PREFIXES.indexOf(prefix) >= 0) return;              // 仅会话级前缀
     if (serialized.length > GM_PERSIST_MAX_BYTES) return;   // 体积兜底
+    // GM 持久层条目帽：TTL 非 0 时条目随看过的视频单调增长，同步桥读写的成本
+    // 随之上升（“越用越卡”在 GM 侧的最后一个累积口）。写入前按 cachedAt 淘汰
+    // 最旧的，封顶 120 条；删除延后到空闲帧，不占交互路径。
+    try {
+      if (typeof GM_listValues === 'function' && typeof GM_deleteValue === 'function') {
+        const keys = GM_listValues().filter(k => CACHE_PREFIXES.some(pref => k.startsWith(pref)));
+        if (keys.length >= 120) {
+          const evict = () => {
+            const stamped = keys.map(k => {
+              let at = 0;
+              try { at = Date.parse(JSON.parse(GM_getValue(k, '{}').cachedAt)) || 0; } catch (_) {}
+              return { k, at };
+            }).sort((a, b) => a.at - b.at);
+            for (let i = 0; i < stamped.length - 119; i += 1) {
+              try { GM_deleteValue(stamped[i].k); } catch (_) { /* ignore */ }
+            }
+          };
+          if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(evict);
+          else window.setTimeout(evict, 0);
+        }
+      }
+    } catch (_) { /* GM 不可用时跳过 */ }
     // 持久层写入延后到空闲帧，避免占点击/按键的关键路径。
     // 能走到这里的值已不超过 GM_PERSIST_MAX_BYTES，阻塞可忽略。
     const persist = () => { try { GM_setValue(fullKey, serialized); } catch (_) { /* 忽略存储异常 */ } };
+    // 不带 timeout：页面繁忙时 idle 回调不会在 5 秒后被强制执行——强制执行会把
+    // 同步 GM 桥接落在交互帧上（v2.7.4 实测 703ms）。宁可晚写，不抢关键路径。
     if (typeof window.requestIdleCallback === 'function') {
-      window.requestIdleCallback(persist, { timeout: 5000 });
+      window.requestIdleCallback(persist);
     } else {
       window.setTimeout(persist, 0);
     }
@@ -896,6 +934,8 @@
     }
   }
 
+  // 清理 GM 持久层：每次 idle 批删 15 键，避免 N 次同步 GM_deleteValue 连环阻塞
+  //（条目随使用历史增长，几百条时点 🗑 就是数秒冻结）。
   function clearAllCaches() {
     memoryCache.clear();
     try {
@@ -905,9 +945,20 @@
     } catch (_) {
       // 忽略存储异常
     }
-    for (const key of listCacheKeys()) {
-      try { GM_deleteValue(key); } catch (_) { /* 忽略存储异常 */ }
-    }
+    // GM 删除分批 idle 执行：同步连环删在条目多时是数秒级冻结。
+    const gmKeys = listCacheKeys();
+    let index = 0;
+    const drain = () => {
+      const until = Math.min(index + 15, gmKeys.length);
+      for (; index < until; index += 1) {
+        try { GM_deleteValue(gmKeys[index]); } catch (_) { /* 忽略存储异常 */ }
+      }
+      if (index < gmKeys.length) {
+        if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(drain);
+        else window.setTimeout(drain, 0);
+      }
+    };
+    if (gmKeys.length) drain();
   }
 
   // ===== Fork：章节 / 流式分段 / 断点 =====
@@ -1574,8 +1625,6 @@
     input.className = 'q';
     input.type = 'text';
     input.spellcheck = false;
-    // 恢复上次的检索词，重开后直接接着看
-    input.value = subtitleFindLastQuery;
     const count = document.createElement('span');
     count.className = 'count';
     // v2.9.0：不再有「全部字幕/返回命中」模式开关——输入框有字就筛选、
@@ -1761,8 +1810,6 @@
     };
 
     const runSearch = () => {
-      // 记住上次的检索词：关掉面板再按 Ctrl+F 时恢复，与浏览器原生查找栏的体验一致。
-      subtitleFindLastQuery = input.value;
       matches = buildSubtitleMatches(lines || [], input.value);
       cur = matches.length ? 0 : -1;
       render();
@@ -2475,14 +2522,21 @@
     const epInfo = state.epInfo || {};
     const urlBvid = location.pathname.match(/BV[\w]+/i)?.[0];
     const pageNumber = Math.max(1, Number(new URL(location.href).searchParams.get('p')) || Number(state.p) || 1);
-    const currentPage = videoData.pages?.find(page => Number(page.page) === pageNumber);
+    // 合集切集：URL 的 BV 已是新视频，但 __INITIAL_STATE__ 仍是旧的——此时
+    // 旧视频 pages 里按序号取到的 cid 是错配（幽灵缓存键 + 播放器捕获表
+    // 永不命中 → 原先要空等 10 秒）。BV 不一致时不信任 pages，cid 优先取
+    // 播放器实时信息。
+    const stateMatchesUrl = !urlBvid || !videoData.bvid || urlBvid === videoData.bvid;
+    const currentPage = stateMatchesUrl
+      ? videoData.pages?.find(page => Number(page.page) === pageNumber)
+      : null;
 
     return {
       // URL 和当前播放信息在 B 站单页切换时通常比旧的 INITIAL_STATE 更快更新。
       bvid: urlBvid || playInfo.bvid || videoData.bvid || state.bvid || '',
       aid: playInfo.aid || videoData.aid || state.aid || epInfo.aid || 0,
       // 选集切换后 URL 的 p 参数对应 pages，优先使用该分 P 的 cid；其余状态可能仍停留在上一集。
-      cid: currentPage?.cid || epInfo.cid || playInfo.cid || videoData.cid || state.cid || 0,
+      cid: currentPage?.cid || playInfo.cid || epInfo.cid || videoData.cid || state.cid || 0,
     };
   }
 
@@ -2548,7 +2602,10 @@
   }
 
   async function waitForPlayerSubtitleApiUrl(video) {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    // 30 轮 × 100ms = 最多 3 秒（原 100 轮 10 秒——合集切集后 cid 错配时
+    // 100% 等满，主观就是“按了没反应”；配合 getIdFromPage 的错配修复，
+    // 正常场景 1-2 轮即命中）。
+    for (let attempt = 0; attempt < 30; attempt += 1) {
       const url = findPlayerSubtitleApiUrl(video);
       if (url) return url;
       await new Promise(resolve => window.setTimeout(resolve, 100));
@@ -2753,23 +2810,33 @@
     }
   }
 
+  // 句末标点集合（与下一行是否加空格的判断用）。原先用 /…$/.test(累计串) 的正则，
+  // cons-string 每轮被 flatten → O(n²)：实测 1 万行 0.6s、2 万行 2.9s、3.2 万行
+  // 4~11s（长课程视频字幕上万行，点复制时主线程被烧穿——“网页未响应”主因之一）。
+  // 改为只看末字符 + 数组收集，输出逐字节等价（20 组边界用例验证），快约 1000 倍。
+  const SUBTITLE_END_PUNCT = new Set(['。', '，', '、', '；', '：', '！', '？', '…', '—', ',', '.', '!', '?', ';', ':', '”', '’', '」', '』', '）', ')']);
+  const SUBTITLE_START_PUNCT = new Set(['。', '，', '、', '；', '：', '！', '？', '…', '—', ',', '.', '!', '?', ';', ':', '“', '‘', '「', '『', '（', '(']);
+  const isAsciiAlnum = ch => (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+
   function joinSubtitleLines(lines) {
-    let text = '';
+    const parts = [];
     for (const line of lines) {
-      if (!text) {
-        text = line;
+      if (!parts.length) {
+        parts.push(line);
         continue;
       }
       // 保留基础空格：字幕逐条轮番出现，两条之间就是自然断句点。带标点的
       // 字幕在标点处已有边界，不再加空格；无标点字幕（如 B 站 AI 字幕）依靠
       // 这个空格保持句间边界。下一行以标点开头时也不加。
-      const prevEndsPunct = /[。，、；：！？…—,.!?;:”’」』）)]$/.test(text);
-      const lineStartsPunct = /^[。，、；：！？…—,.!?;:“‘「『（(]/.test(line);
-      const lineStartsLatin = /^[A-Za-z0-9]/.test(line);
+      const prev = parts[parts.length - 1];
+      const prevEndsPunct = SUBTITLE_END_PUNCT.has(prev.slice(-1));
+      const first = line.slice(0, 1);
+      const lineStartsPunct = SUBTITLE_START_PUNCT.has(first);
+      const lineStartsLatin = isAsciiAlnum(first);
       const needsSpace = !lineStartsPunct && (lineStartsLatin || !prevEndsPunct);
-      text += needsSpace ? ` ${line}` : line;
+      parts.push(needsSpace ? ` ${line}` : line);
     }
-    return text
+    return parts.join('')
       .replace(/[ \t]*\n[ \t]*/g, '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
@@ -4115,6 +4182,10 @@
       const chapters = await loadVideoChapters(video, videoKey);
       let selection = { mode: 'full' };
       if (chapters.length) {
+        // 面板是全屏遮罩且会一直等待选择：明确提示 + 按钮改文案，避免没注意到
+        // 面板时误以为按钮卡死/页面无响应（遮罩会拦截全页点击）。
+        if (button) button.textContent = '等待选择章节…';
+        showToast('本视频带章节，已弹出选择面板：直接点「开始复制」即整篇，或勾选章节；Esc 取消');
         const picked = await showChapterPanel(chapters, null, {
           title: '选择复制范围',
           hint: '默认整篇复制；取消“整篇”后可勾选章节，仅复制所选章节的文字（带【章节名】分隔）。',
@@ -4477,7 +4548,13 @@
       }
       a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
     }
-    return [a0, b0, c0, d0].map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+    // RFC1321 §3.5：摘要按 a,b,c,d 各 32 位字的低字节在前（小端）输出。
+    // 原实现按大端拼接，产出的是逐字字节交换的错误摘要（10 组测试向量全错）；
+    // B 站服务端对 w_rid 校验宽容未暴露，但签名本就是无效的，修正之。
+    return [a0, b0, c0, d0].map(x => {
+      const h = (x >>> 0).toString(16).padStart(8, '0');
+      return h.slice(6, 8) + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2);
+    }).join('');
   }
 
   // nav 接口换 wbi key（官方约定 key 每天轮换，这里内存/会话缓存 1 小时）。
@@ -4501,7 +4578,7 @@
     }
     key = key.slice(0, 32);
     if (!key) throw new Error('WBI 签名参数为空');
-    wbiKeyMemory = { key, at: new Date().toISOString() };
+    wbiKeyMemory = { key, at: Date.now() }; // 数值：字符串会让上方 Date.now()-at 为 NaN、快路永不命中
     writeCache(WBI_KEY_CACHE_PREFIX, 'key', wbiKeyMemory);
     return key;
   }
@@ -5267,9 +5344,11 @@
     }
     if (existing) {
       // 巡检同步「显示/隐藏页面按钮」（Shadow DOM 内 document.getElementById 够不着，
-      // 走这里统一刷新 display）。注意恢复值必须是 flex：置空会清掉挂载时
-      // cssText 里的 display:flex，容器退回 block 导致两按钮竖排堆叠。
-      existing.style.display = isHidden() ? 'none' : 'flex';
+      // 走这里统一刷新 display）。同值不写：往 B 站活跃布局树写 CSSOM 每次都触发
+      // 样式失效（实测同值 66µs/变更 213µs），与 B 站自身渲染争帧。恢复值必须是
+      // flex：置空会清掉挂载时 cssText 里的 display:flex，两按钮会竖排堆叠。
+      const want = isHidden() ? 'none' : 'flex';
+      if (existing.style.display !== want) existing.style.display = want;
       return;
     }
     const entry = document.createElement('div');
