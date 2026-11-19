@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         一键复制视频全部字幕（B站 / YouTube / 视频号）
 // @namespace    https://github.com/dongyu23/bilibili-copy-subtitles
-// @version      2.9.6
-// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.6 三路静态复审后 P1/P2 全量落地：检索面板 ↑↓ 改增量更新且修当前项>200 条丢失（focusIndex 起批+ensureRendered）；GM 持久层帽补全 pages/chapters 前缀并整体下沉 idle（写缓存同步段不再枚举 GM 全键）；体积判断改真实字节（中文 UTF-16 length 低估约 3 倍）；ASR 断点加 256KB 帽+启动过期清扫；整文件退化路径分片改惰性物化（6.9h 视频峰值 0.8-1.2GB 减半）+ 超大文件前置提示；上传转文字重采样搬进 OfflineAudioContext（主线程 90 分钟约 7s 冻结归零）+去 500MB 白拷+Float32→Int16 分块让出；Ctrl+F 离开视频页放行原生查找；两个章节面板分支均加等待提示；BODY/会话帽两段合并为 enforceSessionCap（配额恢复删到帽-1）；清除缓存 idle 加 2s 兜底+文案如实；内存命中补 TTL 检查；base64 按 3 倍数分块（消 16MB 中间串）；进度面板 timer 挂面板元素（双 ASR 流互不干扰）+自清；mountButton observer 挂载即断开；听悟按钮离开转写页摘除；设置面板关闭动画窗口重开闪没修复；播放器 URL 捕获加 bilibili.com 预筛；巡检按 site 门控；章节归桶双指针化；评论区入口改单例重附+委托点击+style 注入 hover（重渲染零分配）。v2.9.5 卡顿根修（三路子智能体审计）：字幕拼接 O(n²) 二次方修复（cons-string+正则 $ 锚每轮 flatten，实测 3.2 万行 3.9s→9.5ms，约 400 倍，输出逐字节等价——长课程视频点复制时主线程被烧穿的主因）；合集切集后 bvid/cid 错配修复（原先 100% 触发 10 秒空等，“多次回退后按按钮卡死”的主因），播放器 URL 等待从 10 秒缩到 3 秒；GM 持久层加 120 条帽+空闲写入去掉 5 秒强制超时+清除缓存分批 idle 删除（同步 GM 桥随历史累积阻塞交互帧的主因）；识别全文的会话缓存 24→8 条（防撑爆配额后缓存静默失效）；评论区巡检同值不写样式；修正 WBI 签名 md5 字节序（10 组向量全错→全对，B 站服务端宽容未暴露）、WBI key 内存缓存类型错误、配额恢复幽灵键；移除检索词跨面板保留。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
+// @version      2.9.7
+// @description  一键复制 Bilibili / YouTube / 微信视频号 / 通义听悟的纯文字内容，去除时间戳和字幕边界并保留正文标点；无字幕视频可回退到 StepFun 语音识别（视频号经元宝解析直链后整包送识别），支持上传本地音视频文件转文字，Key 图形化配置、端点与调试设置、识别进度、耗时统计与缓存留存时间。v2 新增章节选择、流式分段识别、断点续传与独立工作标签页隔离，超长视频不再撑爆渲染进程；v2.2 起有字幕且带章节的 B 站视频同样支持按章节勾选复制，输出带【章节名】分隔；字幕直链过期（CDN 403）时自动换链重试；v2.3 新增跨集复制：多分P（按选集分段而非按章节分段）的视频可在右侧“视频选集”旁一键勾选集数，逐集获取字幕并按 【Pn】【标题】 分段拼接复制；v2.4 起跨集复制中无字幕的集自动回退 StepFun 语音识别（与单视频链路同缓存键，识别结果按集留存，重复复制不重复计费），平台有字幕的集一律原样使用平台数据；v2.5.1 修复行拼接空格：西文行间与标点后不再粘字；v2.5.2 起无标点字幕的每两条之间也保留一个基础空格（字幕逐条轮番出现，条与条即自然断句点；已有标点的边界不重复加），让 AI 字幕等无标点文本也有清晰的句间边界。v2.6 新增通义听悟转写页适配：/doc/transcripts、/discover/transcripts、/doc/share 三种路由一键复制转写纯文字。v2.6.1 加固请求层：全部 8 处 fetch 均有兜底与错误分类，浏览器请求失败自动回退油猴通道，底层网络错误翻译为可操作的中文提示（区分代理/扩展/@connect/超时），服务端错误不再被误报成连接问题。v2.7 新增字幕检索：B 站视频页按 Ctrl/Cmd+F 弹出检索框，索引当前分P字幕，命中项带时间点，可上下切换并跳转播放进度，检索词跨开关保留；同时修复字幕直链过期时仅 403 才换链的问题（传输层失败也会换新链重试）。v2.7.1 检索面板新增「全部字幕」模式：不输入关键字也可逐条点击字幕跳转；缓存改为以原始字幕行为唯一来源，整篇/章节/检索/跨集四方共用一份，章节复制不再重复拉取与重复占用。v2.7.2 降低长视频字幕卡顿：命中列表改为与全量字幕同一套窗口化渲染（按 200 条一批滚动续载，实测高频词「的」919 命中从一次性建 919 行降到 200 行）；持久层缓存写入延后到空闲帧，不再占点击/按键的关键路径。v2.7.3 缩小字幕缓存体积并设条目上限：字幕行改为制表符分隔的紧凑文本（落盘体积约为 JSON 数组的 0.57，实测 296 条 15KB→9KB），条目数上限 8、超额按写入顺序淘汰，避免看过的视频一多把 sessionStorage/GM 存储撑爆。v2.7.4 修复生产环境输入延迟：字幕行缓存不再写入 GM 持久层（其 chrome.storage 写入是同步桥接，延后到空闲帧执行时会阻塞主线程数百毫秒，正好落在悬停进度条/按播放暂停的时刻，已实测复现 703ms 阻塞并修复）；另修 sessionStorage 配额满时淘汰失效的问题。v2.7.5 主控件新增清除缓存按钮（🗑，与齿轮并列，带确认）；启动时自动清理旧版写入的 GM 字幕行残留，无需手动操作。v2.8.0 跨集复制支持合集（ugc_season）：合集视频右侧同样是“视频选集”面板但每集是独立 BV，此前入口不显示；现在合集视频同样挂出「跨集复制」，集数列表按合集小节分组、标记当前集，逐集以各自 bvid+cid 走 WBI 签名接口取字幕（与单视频链路同缓存键），无字幕集同样回退 StepFun 语音识别，输出仍按 【Pn】【标题】 分段；合集面板小节头带「全选本节/取消本节」整节勾选，与全部选集、单集勾选三方联动；选集缓存键升级 video-pages-v2（旧缓存把合集存成了“仅 1 个分P”，会挡住合集分支）；同时整理左下角主控件：统一盒模型消除右缘参差，齿轮与清缓存合并为一行，间距与内边距统一。v2.9.0 新增评论复制（默认关闭，设置里勾选开启）：开启后 B 站视频页评论区标题旁出现「复制评论区 / 复制评论和字幕」两个按钮（评论区组件 Shadow DOM 内，巡检自动重建），按热度/时间抓取评论为纯文本，置顶评论置前标注，UP 主及 UP 主赞过有标记，可选包含楼中楼（缩进显示）与抓取上限（前100/300/1000/全部），组合模式输出【字幕】【评论】两段（无字幕时先自动语音识别生成字幕段——与单视频同链路同缓存不重复计费，未配置 Key 或取消识别则仅评论并注明原因），访客可用按热度排序，按时间排序需登录；访客态评论接口每页仅放行前 3 条（登录后可获取更多，脚本会明示截断）；置顶评论不占抓取额度且自动去重；评论翻页具备按页容错与单线程楼中楼翻页上限。字幕检索面板打开即展示全部字幕列表——输入关键字自动筛选、清空自动回全量（无模式开关），已语音识别过的视频打开面板自动回填识别结果（免点按钮），左下角新增「字幕列表」按钮一键打开全量字幕视图。字幕跨集与评论抓取的页/集间停顿全部改为随机抖动（200–500ms），无固定节拍特征。油猴菜单新增「复制评论区」入口。v2.9.7 修复批量复制时多个无字幕集只识别第一个、其余全部失败：音轨接口改走 WBI 签名 playurl（未签名接口连续请求易被 412 风控，为主因），获取失败 1.2 秒后自动重试一次，语音识别集之间加 2.5 秒冷却（识别期间的几十个 CDN 请求让下一集 playurl 易触发瞬时风控），失败集在结果提示中注明具体原因。v2.9.6 三路静态复审后 P1/P2 全量落地：检索面板 ↑↓ 改增量更新且修当前项>200 条丢失（focusIndex 起批+ensureRendered）；GM 持久层帽补全 pages/chapters 前缀并整体下沉 idle（写缓存同步段不再枚举 GM 全键）；体积判断改真实字节（中文 UTF-16 length 低估约 3 倍）；ASR 断点加 256KB 帽+启动过期清扫；整文件退化路径分片改惰性物化（6.9h 视频峰值 0.8-1.2GB 减半）+ 超大文件前置提示；上传转文字重采样搬进 OfflineAudioContext（主线程 90 分钟约 7s 冻结归零）+去 500MB 白拷+Float32→Int16 分块让出；Ctrl+F 离开视频页放行原生查找；两个章节面板分支均加等待提示；BODY/会话帽两段合并为 enforceSessionCap（配额恢复删到帽-1）；清除缓存 idle 加 2s 兜底+文案如实；内存命中补 TTL 检查；base64 按 3 倍数分块（消 16MB 中间串）；进度面板 timer 挂面板元素（双 ASR 流互不干扰）+自清；mountButton observer 挂载即断开；听悟按钮离开转写页摘除；设置面板关闭动画窗口重开闪没修复；播放器 URL 捕获加 bilibili.com 预筛；巡检按 site 门控；章节归桶双指针化；评论区入口改单例重附+委托点击+style 注入 hover（重渲染零分配）。v2.9.5 卡顿根修（三路子智能体审计）：字幕拼接 O(n²) 二次方修复（cons-string+正则 $ 锚每轮 flatten，实测 3.2 万行 3.9s→9.5ms，约 400 倍，输出逐字节等价——长课程视频点复制时主线程被烧穿的主因）；合集切集后 bvid/cid 错配修复（原先 100% 触发 10 秒空等，“多次回退后按按钮卡死”的主因），播放器 URL 等待从 10 秒缩到 3 秒；GM 持久层加 120 条帽+空闲写入去掉 5 秒强制超时+清除缓存分批 idle 删除（同步 GM 桥随历史累积阻塞交互帧的主因）；识别全文的会话缓存 24→8 条（防撑爆配额后缓存静默失效）；评论区巡检同值不写样式；修正 WBI 签名 md5 字节序（10 组向量全错→全对，B 站服务端宽容未暴露）、WBI key 内存缓存类型错误、配额恢复幽灵键；移除检索词跨面板保留。v2.9.4 性能修复（越用越卡）：字幕等待轮询不再每轮全量重扫资源表（原先 100 轮×每轮几百次 URL 解析，正好烧在悬停进度条/播放操作时刻）；内存缓存加 48 条 LRU 上限（长会话 SPA 看视频不再无限驻留）；sessionStorage 的字幕列表/识别结果条目加 24 条上限（防逼近配额后每次写大 JSON 卡顿）。v2.9.2 设置面板重新设计：Shadow DOM 隔离、左导航四分区（语音识别/视频号/功能开关/字幕缓存）、所有设置即时生效（无保存按钮，文本 400ms 防抖自动存）、checkbox 升级为开关、高级项与长说明默认折叠、Esc/遮罩/✕ 关闭、开合动画、跟随系统暗色。
 // @author       dongyu23
 // @homepageURL  https://github.com/dongyu23/bilibili-copy-subtitles
 // @supportURL   https://github.com/dongyu23/bilibili-copy-subtitles/issues
@@ -3001,12 +3001,25 @@
     if (video.bvid) query.set('bvid', video.bvid);
 
     let data = null;
-    try {
-      const result = await requestJson(`${endpoint}?${query}`);
-      if (result.code === 0) data = result.data;
-      else console.warn('[复制字幕] 播放接口返回异常', result.code, result.message);
-    } catch (error) {
-      console.warn('[复制字幕] 播放接口请求失败，尝试复用播放器请求', error);
+    // 普通视频优先 WBI 签名接口（批量跨集时未签名 playurl 连续请求易被 412 风控，
+    // 表现为"只识别第一集、其余全部失败"）；失败退回未签名，再退回播放器捕获表。
+    if (!isBangumi) {
+      try {
+        const result = await requestJson(await buildWbiPlayUrl(video));
+        if (result.code === 0) data = result.data;
+        else console.warn('[复制字幕] WBI 播放接口返回异常', result.code, result.message);
+      } catch (error) {
+        console.warn('[复制字幕] WBI 播放接口请求失败，退回未签名接口', error);
+      }
+    }
+    if (!data?.dash) {
+      try {
+        const result = await requestJson(`${endpoint}?${query}`);
+        if (result.code === 0) data = result.data;
+        else console.warn('[复制字幕] 播放接口返回异常', result.code, result.message);
+      } catch (error) {
+        console.warn('[复制字幕] 播放接口请求失败，尝试复用播放器请求', error);
+      }
     }
     if (!data?.dash) {
       const captured = findCapturedPlayApiUrl(video);
@@ -4710,6 +4723,23 @@
     return key;
   }
 
+  // 构造带 w_rid 签名的 playurl 请求地址（跨集 ASR 兜底取音轨用）。
+  // 未签名 /x/player/playurl 在连续多集请求时易被风控（412/HTML，与评论接口同模式），
+  // 批量复制"只识别第一集、其余全部失败"的主因。签名请求与官方前端行为一致。
+  async function buildWbiPlayUrl(video) {
+    const key = await getWbiKey();
+    const params = {
+      cid: String(video.cid), qn: '16', otype: 'json', fourk: '1', fnver: '0', fnval: '4048',
+      wts: String(Math.floor(Date.now() / 1000)),
+    };
+    if (video.aid) params.avid = String(video.aid);
+    if (video.bvid) params.bvid = video.bvid;
+    const encoded = Object.keys(params).sort()
+      .map(name => `${encodeURIComponent(name)}=${encodeURIComponent(params[name].replace(/[!'()*]/g, ''))}`)
+      .join('&');
+    return `https://api.bilibili.com/x/player/wbi/playurl?${encoded}&w_rid=${md5Hex(`${encoded}${key}`)}`;
+  }
+
   // 构造带 w_rid 签名的 wbi/v2 请求地址。
   async function buildWbiPlayerUrl(video) {
     const key = await getWbiKey();
@@ -5056,7 +5086,19 @@
     const cached = readCache(BODY_CACHE_PREFIX, cacheKey);
     if (cached) return cached;
     if (runState.declined) return '';
-    const track = await fetchAudioTrack(video);
+    // 音轨获取失败重试一次：批量场景连续 playurl 请求可能被瞬时风控，
+    // 1.2 秒后重试通常即可通过（比直接放弃该集好得多）。
+    let track = null;
+    let trackError = null;
+    for (let attempt = 0; attempt < 2 && !track; attempt += 1) {
+      try {
+        track = await fetchAudioTrack(video);
+      } catch (error) {
+        trackError = error;
+        if (attempt === 0) await new Promise(r => window.setTimeout(r, 1200));
+      }
+    }
+    if (!track) throw trackError || new Error('未获取到音频流');
     const estimateSeconds = estimateAsrSeconds(track.duration);
     if (!asrConsentGiven && !window.confirm(
       `「P${pageInfo.page} ${pageInfo.part || `第${pageInfo.page}个分P`}」没有字幕，将下载音频（约 ${formatAudioDuration(track.duration)}）`
@@ -5123,6 +5165,7 @@
         aid: pageInfo.aid || aid,
         cid: pageInfo.cid,
       };
+      let usedAsr = false;
       try {
         const subtitles = await fetchEpisodeSubtitleMeta(video);
         const subtitle = chooseSubtitle(subtitles, language);
@@ -5134,7 +5177,9 @@
         } else {
           // 该集没有字幕：走单视频同款语音识别兜底，结果按集缓存。
           ui.note(`P${pageInfo.page} 无字幕，转语音识别`);
+          usedAsr = true;
           text = await transcribeEpisodeViaAsr(video, pageInfo, asrRunState);
+          usedAsr = !!text;
         }
         if (!text) {
           skipped.push(epLabel(pageInfo));
@@ -5143,13 +5188,19 @@
         }
       } catch (error) {
         console.warn('[复制字幕] 跨集获取失败', `P${pageInfo.page}`, error);
-        skipped.push(epLabel(pageInfo));
+        // 失败原因透传：光看"未获取到 P12"分不清是没字幕还是接口被风控。
+        const reason = String(error?.message || error).replace(/\s+/g, ' ').slice(0, 30);
+        skipped.push(`${epLabel(pageInfo)}（${reason}）`);
       }
       done += 1;
       ui.progress(done, pages.length, null);
       // 集与集之间稍作停顿（随机抖动，避免固定节拍的连发特征）。
+      // 刚做完一集语音识别时额外冷却：识别期间向 B 站发起了几十个 CDN Range
+      // 请求 + playurl，紧接着的下一集 playurl 容易触发瞬时风控（表现为
+      // "只识别第一集、其余全部失败"）。2.5s 冷却让风控窗口滑过。
       if (pageIndex < pages.length - 1) {
-        await jitterDelay(200, 150);
+        if (usedAsr) await jitterDelay(2500, 500);
+        else await jitterDelay(200, 150);
       }
     }
     if (episodeCopyCancelled) return null;
